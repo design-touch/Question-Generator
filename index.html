@@ -87,6 +87,11 @@ button:disabled{opacity:.45;cursor:not-allowed}
   .preview-head{padding:10px}
   .preview-actions button{padding:6px 8px;font-size:.78rem}
 }
+
+.csv-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:10px}
+.csvdrop{min-height:90px;display:flex;align-items:center;justify-content:center;text-align:center}
+#csvReport{margin-top:12px;white-space:pre-line}
+@media(max-width:850px){.csv-grid{grid-template-columns:1fr}}
 </style></head><body>
 <section class="auth-wrap" id="loginPanel">
   <div class="login-container">
@@ -152,7 +157,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <main id="app" hidden>
 <div class="topbar"><div class="headcopy"><h1>📝 প্রশ্নপত্র সেট জেনারেটর</h1>
 <p class="s">Master Word বা তৈরি করা Single/Subset Word (.docx) আপলোড করুন। Word সেট তৈরি, Single Word/ZIP download এবং সরাসরি CSV download করা যাবে।</p></div>
-<div class="userbox"><span id="who"></span><br><a id="adminUsersLink" href="users.html?admin=1" target="_blank" rel="noopener" hidden>👑 Admin Dashboard</a><button class="o" id="logout" type="button">Logout</button></div></div>
+<div class="userbox"><span id="who"></span><br><a href="users.html" target="_blank" rel="noopener">Users / ID Setup</a><button class="o" id="logout" type="button">Logout</button></div></div>
 
 <div class="card"><h2>১. Word ফাইল (.docx) — Master / Single Set / Subset</h2>
 <label class="drop" id="drop"><input type="file" id="file" accept=".docx">ফাইল বেছে নিন বা এখানে ছেড়ে দিন</label>
@@ -160,7 +165,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
 <div class="card"><h2>২. সেটিংস</h2>
 <div class="g">
-<label class="f">সেটের সংখ্যা<select id="n"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option></select></label>
+<label class="f">সেটের সংখ্যা / Subset<select id="n"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option><option>11</option><option>12</option></select></label>
 <label class="f">Question Name <input type="text" id="code" value="B-01"></label>
 <label class="f">Code<input type="text" id="name" value="Brahmaputra"></label>
 <label class="f">Session<input type="text" id="ses" value="2026-27"></label>
@@ -169,7 +174,35 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap"><button id="go" disabled>সেট তৈরি করুন</button><button class="o" id="csv" disabled>CSV ডাউনলোড</button></div>
 <div class="msg" id="st"></div></div>
 
-<div class="card" id="out" hidden><h2>৩. Word / ZIP ডাউনলোড</h2>
+
+<div class="card" id="csvGeneratorCard">
+<h2>৩. CSV Generator — আলাদা Upload</h2>
+<div class="csv-grid">
+  <div>
+    <label class="drop csvdrop"><input type="file" id="csvMasterFiles" accept=".docx" multiple>📄 CSV Master ফাইল বেছে নিন (একাধিক)</label>
+    <div class="msg" id="csvMasterInfo"></div>
+  </div>
+  <div>
+    <label class="drop csvdrop"><input type="file" id="csvQuestionFiles" accept=".docx" multiple>📝 Question Word ফাইল বেছে নিন (একাধিক)</label>
+    <div class="msg" id="csvQuestionInfo"></div>
+  </div>
+  <div>
+    <label class="drop csvdrop"><input type="file" id="csvAnswerFiles" accept=".docx" multiple>✅ Answer Word ফাইল বেছে নিন (একাধিক)</label>
+    <div class="msg" id="csvAnswerInfo"></div>
+  </div>
+  <div>
+    <label class="drop csvdrop"><input type="file" id="csvCombinedFiles" accept=".docx" multiple>📄 প্রশ্ন + উত্তর একই Word ফাইল (একাধিক)</label>
+    <div class="msg" id="csvCombinedInfo"></div>
+  </div>
+</div>
+<div class="msg" id="csvReport">CSV তৈরি করতে Master অথবা Question + Answer ফাইল দিন।</div>
+<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+  <button id="csvGenerate" disabled>CSV তৈরি ও Download</button>
+  <button id="csvReverse" disabled class="o" title="Header অপরিবর্তিত রেখে সব data row বিপরীত ক্রমে Download">↕ CSV Reverse</button>
+</div>
+</div>
+
+<div class="card" id="out" hidden><h2>৪. Word / ZIP ডাউনলোড</h2>
 <div class="msg" style="margin:0 0 8px">প্রতিটি সেট আলাদা Word (.docx) হিসেবে অথবা সবগুলো একসাথে ZIP হিসেবে ডাউনলোড করুন।</div>
 <div id="list"></div>
 <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap"><button class="o" id="zip">সব Word ফাইল ZIP ডাউনলোড</button></div></div>
@@ -200,6 +233,7 @@ const $=id=>document.getElementById(id);
 const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
 let Q=[],files=[];
+let CURRENT_UPLOAD_FILE=null;
 
 /* ---------- login / access gate ----------
    User accounts are loaded from users.html via a same-page hidden iframe.
@@ -208,8 +242,6 @@ let Q=[],files=[];
 let AUTH_USERS=[];
 let USERS_READY=false;
 const AUTH_KEY='mcq_auth_session_v2';
-const ADMIN_EMAIL='admin@mcq.local';
-const ADMIN_SESSION_KEY='mcq_admin_session_v1';
 let authFails=0, authLockedUntil=0;
 const normEmail=v=>String(v||'').trim().toLowerCase();
 const authStore=()=>($('remember')&&$('remember').checked?localStorage:sessionStorage);
@@ -222,13 +254,12 @@ async function sha256Hex(text){
 }
 function normalizeUsers(users){
   return (Array.isArray(users)?users:[]).map(u=>({
-    email:normEmail(u.email),name:String(u.name||u.email||'User'),passwordHash:String(u.passwordHash||'').toLowerCase(),disabled:!!u.disabled
+    email:normEmail(u.email),name:String(u.name||u.email||'User'),passwordHash:String(u.passwordHash||'').toLowerCase()
   })).filter(u=>u.email&&/^[a-f0-9]{64}$/.test(u.passwordHash));
 }
 function userByEmail(email){return AUTH_USERS.find(u=>u.email===normEmail(email));}
-function isAdminEmail(email){return normEmail(email)===ADMIN_EMAIL;}
 async function validCredentials(email,password){
-  const u=userByEmail(email);if(!u||u.disabled)return false;
+  const u=userByEmail(email);if(!u)return false;
   return (await sha256Hex(password))===u.passwordHash;
 }
 function finishUsersLoad(users){
@@ -267,10 +298,6 @@ function setLoginMessage(msg=''){
 function showApp(email){
   const u=userByEmail(email);
   $('loginPanel').hidden=true;$('app').hidden=false;$('who').textContent=u?`${u.name} · ${u.email}`:email;
-  const admin= isAdminEmail(email);
-  const adminLink=document.getElementById('adminUsersLink');
-  if(adminLink) adminLink.hidden=!admin;
-  try{if(admin)localStorage.setItem(ADMIN_SESSION_KEY,ADMIN_EMAIL);else localStorage.removeItem(ADMIN_SESSION_KEY)}catch(e){}
 }
 function finishLogin(email){
   clearAuthStores();
@@ -302,7 +329,7 @@ $('loginForm').addEventListener('submit',async e=>{
 });
 $('forgotPassword').addEventListener('click',e=>{e.preventDefault();$('loginNotice').textContent='Password-এর জন্য অ্যাডমিনের সাথে যোগাযোগ করুন।';});
 $('signupLink').addEventListener('click',e=>{e.preventDefault();window.open('users.html','_blank');});
-$('logout').onclick=()=>{clearAuthStores();try{localStorage.removeItem(ADMIN_SESSION_KEY)}catch(e){}showLogin();};
+$('logout').onclick=()=>{clearAuthStores();showLogin();};
 showLogin(false);
 
 
@@ -491,6 +518,523 @@ async function build(order,letter,o){
   return{blob:await z.generateAsync({type:'blob',compression:'DEFLATE',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}),key:key.join('')};
 }
 
+/* ---------- Separate CSV Generator ---------- */
+let CSV_MASTER_Q=[], CSV_QFILES=[], CSV_AFILES=[];
+
+// ---------- Word equation -> KaTeX (CSV only) ----------
+const MNS='http://schemas.openxmlformats.org/officeDocument/2006/math';
+function ommlChildren(n,name){return [...n.children].filter(x=>x.namespaceURI===MNS&&x.localName===name)}
+function ommlText(n){return [...n.getElementsByTagNameNS(MNS,'t')].map(x=>x.textContent).join('')}
+function ommlToKatex(n){
+  const ln=n.localName;
+  if(ln==='oMath'||ln==='oMathPara') return [...n.children].map(ommlToKatex).join('');
+  if(ln==='r') return ommlText(n);
+  if(ln==='f'){
+    const num=ommlChildren(n,'num')[0],den=ommlChildren(n,'den')[0];
+    return `\\frac{${num?[...num.children].map(ommlToKatex).join(''):''}}{${den?[...den.children].map(ommlToKatex).join(''):''}}`;
+  }
+  if(ln==='sSub'){
+    const e=ommlChildren(n,'e')[0],sub=ommlChildren(n,'sub')[0];
+    return `${e?[...e.children].map(ommlToKatex).join(''):''}_{${sub?[...sub.children].map(ommlToKatex).join(''):''}}`;
+  }
+  if(ln==='sSup'){
+    const e=ommlChildren(n,'e')[0],sup=ommlChildren(n,'sup')[0];
+    return `${e?[...e.children].map(ommlToKatex).join(''):''}^{${sup?[...sup.children].map(ommlToKatex).join(''):''}}`;
+  }
+  if(ln==='sSubSup'){
+    const e=ommlChildren(n,'e')[0],sub=ommlChildren(n,'sub')[0],sup=ommlChildren(n,'sup')[0];
+    return `${e?[...e.children].map(ommlToKatex).join(''):''}_{${sub?[...sub.children].map(ommlToKatex).join(''):''}}^{${sup?[...sup.children].map(ommlToKatex).join(''):''}}`;
+  }
+  if(ln==='rad'){
+    const deg=ommlChildren(n,'deg')[0],e=ommlChildren(n,'e')[0];
+    const body=e?[...e.children].map(ommlToKatex).join(''):'';
+    return deg?`\\sqrt[${[...deg.children].map(ommlToKatex).join('')}] {${body}}`:`\\sqrt{${body}}`;
+  }
+  if(ln==='d'){
+    const beg=n.getElementsByTagNameNS(MNS,'begChr')[0]?.getAttribute('m:val')||n.getElementsByTagNameNS(MNS,'begChr')[0]?.getAttribute('val')||'(',
+          end=n.getElementsByTagNameNS(MNS,'endChr')[0]?.getAttribute('m:val')||n.getElementsByTagNameNS(MNS,'endChr')[0]?.getAttribute('val')||')';
+    const e=ommlChildren(n,'e')[0];
+    return `\\left${beg}${e?[...e.children].map(ommlToKatex).join(''):''}\\right${end}`;
+  }
+  if(ln==='func'){
+    const fName=ommlChildren(n,'fName')[0],e=ommlChildren(n,'e')[0];
+    return `${fName?[...fName.children].map(ommlToKatex).join(''):''} ${e?[...e.children].map(ommlToKatex).join(''):''}`;
+  }
+  if(ln==='nary'){
+    const pr=ommlChildren(n,'naryPr')[0],e=ommlChildren(n,'e')[0];
+    const chr=pr?.getElementsByTagNameNS(MNS,'chr')[0]?.getAttribute('m:val')||pr?.getElementsByTagNameNS(MNS,'chr')[0]?.getAttribute('val');
+    const map={'∑':'\\sum','∏':'\\prod','∫':'\\int','∮':'\\oint'};
+    return `${map[chr]||chr||'\\sum'}${e?[...e.children].map(ommlToKatex).join(''):''}`;
+  }
+  if(ln==='acc'){
+    const chr=ommlChildren(n,'accPr')[0]?.getElementsByTagNameNS(MNS,'chr')[0]?.getAttribute('m:val')||'';
+    const e=ommlChildren(n,'e')[0];
+    const body=e?[...e.children].map(ommlToKatex).join(''):'';
+    return chr==='¯'?`\\bar{${body}}`:`\\hat{${body}}`;
+  }
+  if(ln==='bar'){
+    const e=ommlChildren(n,'e')[0];
+    return `\\bar{${e?[...e.children].map(ommlToKatex).join(''):''}}`;
+  }
+  return [...n.children].map(c=>c.namespaceURI===MNS?ommlToKatex(c):'').join('')||ommlText(n);
+}
+function eqFieldToKatex(instr){
+  const s=(instr||'').replace(/\s+/g,' ').trim();
+  const m=s.match(/^EQ\s+\\f\s*\(\s*([^,]+?)\s*,\s*(.+?)\s*\)$/i);
+  if(m)return `\\frac{${legacyEqPart(m[1])}}{${legacyEqPart(m[2])}}`;
+  return '';
+}
+function legacyEqPart(s){
+  return (s||'').trim()
+    .replace(/\\s\\s*/g,' ')
+    .replace(/\\(pi|alpha|beta|gamma|theta|lambda|mu|omega)\b/gi,(m,n)=>'\\'+n)
+    .replace(/([A-Za-z])([0-9]+)/g,'$1_$2');
+}
+function cellCsvText(tc){
+  function walkChildren(parent){
+    const arr=[...parent.childNodes],out=[];
+    for(let i=0;i<arr.length;i++){
+      const n=arr[i];
+      if(n.nodeType!==1)continue;
+      if(n.namespaceURI===MNS && (n.localName==='oMath'||n.localName==='oMathPara')){out.push('$'+ommlToKatex(n)+'$');continue;}
+      if(n.namespaceURI===NS && n.localName==='fldSimple'){
+        const instr=n.getAttributeNS(NS,'instr')||n.getAttribute('w:instr')||'';
+        const k=eqFieldToKatex(instr); out.push(k?'$'+k+'$':walkChildren(n)); continue;
+      }
+      if(n.namespaceURI===NS && n.localName==='r'){
+        const instr=[...n.getElementsByTagNameNS(NS,'instrText')].map(x=>x.textContent).join('');
+        if(instr){
+          const k=eqFieldToKatex(instr); if(k)out.push('$'+k+'$');
+          continue;
+        }
+        const ts=[...n.getElementsByTagNameNS(NS,'t')].map(x=>x.textContent).join('');
+        if(ts)out.push(ts);
+        continue;
+      }
+      if(n.namespaceURI===NS && n.localName==='p'){
+        const kids2=[...n.childNodes];
+        for(let j=0;j<kids2.length;j++){
+          const x=kids2[j];
+          if(x.nodeType!==1)continue;
+          if(x.namespaceURI===NS&&x.localName==='r'){
+            const fc=[...x.getElementsByTagNameNS(NS,'fldChar')].find(e=>(e.getAttributeNS(NS,'val')||e.getAttribute('w:fldCharType'))==='begin');
+            if(fc){
+              let instr='',endFound=false;
+              for(let k=j+1;k<kids2.length;k++){
+                const y=kids2[k];
+                if(y.nodeType!==1)continue;
+                instr+=[...y.getElementsByTagNameNS(NS,'instrText')].map(e=>e.textContent).join('');
+                const ef=[...y.getElementsByTagNameNS(NS,'fldChar')].find(e=>(e.getAttributeNS(NS,'val')||e.getAttribute('w:fldCharType'))==='end');
+                if(ef){j=k;endFound=true;break;}
+              }
+              const kk=eqFieldToKatex(instr); if(kk)out.push('$'+kk+'$');
+              if(endFound)continue;
+            }
+          }
+          if(x.namespaceURI===MNS&&(x.localName==='oMath'||x.localName==='oMathPara'))out.push('$'+ommlToKatex(x)+'$');
+          else if(x.namespaceURI===NS&&x.localName==='r'){
+            const ii=[...x.getElementsByTagNameNS(NS,'instrText')].map(e=>e.textContent).join('');
+            if(ii){const kk=eqFieldToKatex(ii);if(kk)out.push('$'+kk+'$');}
+            else out.push([...x.getElementsByTagNameNS(NS,'t')].map(e=>e.textContent).join(''));
+          }else if(x.namespaceURI===NS&&x.localName==='tab')out.push(' ');
+        }
+        out.push(' '); continue;
+      }
+      if(n.namespaceURI===NS&&n.localName==='tbl')out.push(walkChildren(n));
+      else out.push(walkChildren(n));
+    }
+    return out.join('');
+  }
+  return walkChildren(tc).replace(/\s+/g,' ').trim();
+}
+
+function csvFileLabel(files){
+  return files.length ? files.map(f=>f.name).join(', ') : 'কোনো ফাইল নেই';
+}
+
+async function parseQuestionOnly(f){
+  const z=await JSZip.loadAsync(f), entry=z.file('word/document.xml');
+  if(!entry)throw new Error('বৈধ Word ফাইল নয়: '+f.name);
+  const d=new DOMParser().parseFromString(await entry.async('string'),'application/xml');
+  const body=d.getElementsByTagNameNS(NS,'body')[0];
+  const tbls=kids(body).filter(k=>k.localName==='tbl');
+  if(!tbls.length)throw new Error('Question table পাওয়া যায়নি: '+f.name);
+
+  const map=new Map(), bad=[];
+  // একই DOCX-এ Question table-এর পরে Answer Sheet table থাকতে পারে।
+  // Answer Sheet-কে Question table হিসেবে parse করা যাবে না।
+  const questionTbls=tbls.filter(tbl=>{
+    const sample=cellCsvText(tbl).replace(/\s+/g,' ').trim();
+    const hasAnswerHeader=/Answer\s*Sheet|Q\s*No\.?\s*An\s*s|Explanation/i.test(sample);
+    const hasQuestion=/(?:^|\s)1\s*[\.\)]/.test(sample) && /(?:^|\s)A\s*[\.\)\-:]/i.test(sample);
+    return !hasAnswerHeader && hasQuestion;
+  });
+  // সাধারণ Question table না মিললে প্রথম table-টিকে fallback হিসেবে নেব,
+  // কিন্তু Answer Sheet header থাকা table কখনো নেব না।
+  const usableTbls=questionTbls.length?questionTbls:[tbls[0]].filter(tbl=>!/(Answer\s*Sheet|Q\s*No\.?\s*An\s*s|Explanation)/i.test(cellCsvText(tbl)));
+  const addIssue=(n,kind)=>{
+    const old=bad.find(x=>x.n===n);
+    if(old){if(!old.kind.includes(kind))old.kind.push(kind)}
+    else bad.push({n,kind:[kind]});
+  };
+
+  // Word-এর কিছু ফাইলে A/B/C/D চারটি আলাদা cell-এ থাকে,
+  // আবার কিছু ফাইলে Word merge করার কারণে চারটি option একই cell-এ থাকে।
+  // তাই label (A./B./C./D.) দেখে option আলাদা করা হবে।
+  function splitOptions(parts){
+    const text=parts.map(x=>x&&x.__text!==undefined?x.__text:cellCsvText(x)).join(' ').replace(/\s+/g,' ').trim();
+    const re=/([A-D])\s*[\.\)\-:]\s*/gi;
+    const hits=[];
+    let m;
+    while((m=re.exec(text))) hits.push({letter:m[1].toUpperCase(),pos:m.index,end:re.lastIndex});
+    if(!hits.length)return {opts:{},found:[]};
+
+    const opts={};
+    hits.forEach((h,i)=>{
+      const value=text.slice(h.end,i+1<hits.length?hits[i+1].pos:text.length).trim();
+      if(value && opts[h.letter]===undefined)opts[h.letter]=value;
+    });
+    return {opts,found:hits.map(x=>x.letter)};
+  }
+
+  // সাধারণত প্রথম table-এ 100টি question row থাকে।
+  // একই table-এর প্রতিটি row এবং তার ভেতরের nested table—দুই জায়গাই পড়া হয়।
+  for(const tbl of usableTbls){
+    const trs=kids(tbl).filter(k=>k.localName==='tr');
+    for(let idx=0;idx<trs.length;idx++){
+      const tr=trs[idx], cells=kids(tr).filter(k=>k.localName==='tc');
+      if(cells.length<2)continue;
+
+      const nm=cellCsvText(cells[0]).match(/\d+/);
+      const n=nm?Number(nm[0]):idx+1;
+      if(!n)continue;
+
+      const nested=kids(cells[1]).find(k=>k.localName==='tbl');
+      let qParts=[], optionParts=[];
+
+      if(nested){
+        const rows=kids(nested).filter(k=>k.localName==='tr');
+        if(rows.length){
+          const qCells=kids(rows[0]).filter(k=>k.localName==='tc');
+          if(qCells.length)qParts.push(qCells[0]);
+
+          rows.slice(1).forEach(r=>{
+            const cc=kids(r).filter(k=>k.localName==='tc');
+            optionParts.push(...cc);
+          });
+        }
+      }
+
+      // Nested table না থাকলেও পুরো second cell-এর text থেকে parse করার fallback।
+      if(!qParts.length){
+        const allText=cellCsvText(cells[1]).replace(/\s+/g,' ').trim();
+        const firstOpt=allText.search(/(?:^|\s)(?:A|a)\s*[\.\)\-:]\s*/);
+        if(firstOpt>=0){
+          const qText=allText.slice(0,firstOpt).trim();
+          // qText-কে plain text হিসেবে রাখার জন্য মূল cell ব্যবহার না করে
+          // নিচে parsed text থেকে q বানানো হবে।
+          qParts=[{__text:qText}];
+          optionParts=[{__text:allText.slice(firstOpt)}];
+        }else{
+          qParts=[cells[1]];
+        }
+      }
+
+      const qText=qParts.map(x=>x.__text!==undefined?x.__text:cellCsvText(x))
+        .join(' ').replace(/\s+/g,' ').trim();
+
+      // q row-এর পরের cells এবং merged single-cell options—দুটিই এখানে handle হবে।
+      const split=splitOptions(optionParts);
+      let opts=split.opts;
+
+      // কিছু Word ফাইলে question cell-এর text-এর মধ্যেই options থাকে।
+      if(Object.keys(opts).length<4){
+        const allCellText=cellCsvText(cells[1]).replace(/\s+/g,' ').trim();
+        const qMatch=allCellText.search(/(?:^|\s)(?:A|a)\s*[\.\)\-:]\s*/);
+        if(qMatch>=0){
+          const parsed=splitOptions([{__text:allCellText.slice(qMatch)}]);
+          opts=Object.assign({},opts,parsed.opts);
+        }
+      }
+
+      const missing=[];
+      if(!qText)missing.push('Question');
+      for(const L of ['A','B','C','D'])if(!opts[L])missing.push('Option '+L);
+
+      if(missing.length){
+        // প্রশ্নটি CSV থেকে বাদ যাবে না। যে অংশ missing, শুধু সেটি blank থাকবে।
+        addIssue(n,missing.join(', '));
+      }
+
+      // Missing Question/Option থাকলেও পুরো প্রশ্নটি map-এ রাখা হবে।
+      // CSV Generator পরে missing field-টি blank হিসেবে export করবে।
+      map.set(n,{
+        n,
+        q:[{t:qText||''}],
+        o:['A','B','C','D'].map(L=>[{t:opts[L]||''}])
+      });
+    }
+  }
+
+  if(!map.size)throw new Error('Question কাঠামো শনাক্ত করা যায়নি: '+f.name);
+  return {map,bad,title:topTitle(body)};
+}
+async function parseAnswerOnly(f){
+  const z=await JSZip.loadAsync(f), entry=z.file('word/document.xml');
+  if(!entry)throw new Error('বৈধ Word ফাইল নয়: '+f.name);
+  const d=new DOMParser().parseFromString(await entry.async('string'),'application/xml');
+  const body=d.getElementsByTagNameNS(NS,'body')[0], tbl=kids(body).find(k=>k.localName==='tbl');
+  if(!tbl)throw new Error('Answer table পাওয়া যায়নি: '+f.name);
+  const map=new Map(),bad=[];
+  kids(tbl).filter(k=>k.localName==='tr').forEach((tr,idx)=>{
+    const c=kids(tr).filter(k=>k.localName==='tc'); if(c.length<2)return;
+    const n=Number((cellCsvText(c[0]).match(/\d+/)||[])[0]);
+    const am=cellCsvText(c[1]).match(/[A-Da-d]/);
+    if(!n)return;
+    if(!am){
+      bad.push(n);
+      // Answer missing হলেও question row-টি CSV-তে রাখা হবে।
+      map.set(n,{ans:null,ex:[]});
+      return;
+    }
+    map.set(n,{ans:'ABCD'.indexOf(am[0].toUpperCase()),ex:c[2]?[{t:cellCsvText(c[2])}]:[]});
+  });
+  if(!map.size)throw new Error('Answer কাঠামো শনাক্ত করা যায়নি: '+f.name);
+  return {map,bad,title:topTitle(body)};
+}
+
+function topTitle(body){
+  return kids(body).filter(k=>k.localName==='p').map(k=>k.textContent.trim()).find(Boolean)||'';
+}
+
+async function parseCsvMasterFiles(files){
+  const all=[],issues=[];
+  for(const f of files){
+    try{
+      const r=await parseMaster(f);
+      const z=await JSZip.loadAsync(f), entry=z.file('word/document.xml');
+      if(entry){
+        const d=new DOMParser().parseFromString(await entry.async('string'),'application/xml');
+        const body=d.getElementsByTagNameNS(NS,'body')[0];
+        const qcells=[...body.getElementsByTagNameNS(NS,'tc')];
+        let qi=0;
+        for(const q of r.qs){
+          const row=qcells.slice(qi).find(tc=>cellCsvText(tc).trim()===cellCsvText(tc).trim());
+          qi++;
+        }
+      }
+      // Master-এর মূল parser formatting ধরে রাখে; CSV-এর জন্য cell থেকে equation সহ text পুনর্গঠন করি।
+      const flatTbl=[...body.children].find(k=>k.localName==='tbl');
+      if(flatTbl){
+        const rows=[...flatTbl.children].filter(k=>k.localName==='tr');
+        const out=[];
+        for(const tr of rows){
+          const c=[...tr.children].filter(k=>k.localName==='tc');
+          if(c.length>=8){
+            const am=cellCsvText(c[7]).match(/^\s*([A-Da-d])\s*[;；]/);
+            if(am){
+              const qq=cellCsvText(c[1]), oo=[2,3,4,5].map(i=>cellCsvText(c[i])), ex=cellCsvText(c[7]).replace(/^\s*[A-Da-d]\s*[;；]\s*/,'');
+              const ix=out.length; out.push({q:[{t:qq}],o:oo.map(x=>[{t:x}]),ans:'ABCD'.indexOf(am[1].toUpperCase()),ex:[{t:ex}]});
+            }
+          }
+        }
+        if(out.length)r.qs=out;
+      }
+      all.push(...r.qs);
+      if(r.bad.length)issues.push(f.name+': অসম্পূর্ণ প্রশ্ন '+r.bad.join(', '));
+    }catch(e){issues.push(f.name+': '+e.message)}
+  }
+  return {qs:all,issues};
+}
+
+
+async function parseUploadedForCsv(f){
+  const z=await JSZip.loadAsync(f),entry=z.file('word/document.xml');
+  if(!entry)throw new Error('বৈধ Word ফাইল নয়: '+f.name);
+  const d=new DOMParser().parseFromString(await entry.async('string'),'application/xml');
+  const body=d.getElementsByTagNameNS(NS,'body')[0];
+  const tbls=kids(body).filter(k=>k.localName==='tbl');
+  if(!tbls.length)throw new Error('Question table পাওয়া যায়নি: '+f.name);
+  const issues=[];
+  const addIssue=(n,kind)=>issues.push(`${n} (${kind})`);
+
+  // Master format: one flat table with Question / A / B / C / D / ... / Answer / Explanation.
+  const flat=tbls.find(tbl=>kids(tbl).some(tr=>tr.localName==='tr'&&kids(tr).filter(k=>k.localName==='tc').length>=8));
+  if(flat){
+    const rows=kids(flat).filter(k=>k.localName==='tr');
+    const qs=[];
+    rows.forEach((tr,idx)=>{
+      const c=kids(tr).filter(k=>k.localName==='tc');
+      if(c.length<8)return;
+      const n=Number((cellCsvText(c[0]).match(/\d+/)||[])[0])||idx+1;
+      const q=cellCsvText(c[1]);
+      const o=[2,3,4,5].map(i=>cellCsvText(c[i]));
+      const ansText=cellCsvText(c[7]);
+      const am=ansText.match(/^\s*([A-Da-d])\s*[;；]/);
+      if(!q)addIssue(n,'Question');
+      ['A','B','C','D'].forEach((L,i)=>{if(!o[i])addIssue(n,'Option '+L)});
+      if(!am)addIssue(n,'Answer');
+      const ex=am?ansText.replace(/^\s*[A-Da-d]\s*[;；]\s*/,''):ansText;
+      qs.push({n,q:[{t:q}],o:o.map(x=>[{t:x}]),ans:am?'ABCD'.indexOf(am[1].toUpperCase()):null,ex:[{t:ex}]});
+    });
+    if(qs.length)return {qs,issues,title:topTitle(body),source:'master'};
+  }
+
+  // Single/Subset/Combined format: Question table এবং Answer Sheet table
+  // একই DOCX-এ আলাদা top-level table হিসেবে থাকতে পারে। Answer table-টি
+  // header দেখে খুঁজে নেওয়া হবে; শুধু tbls[1] ধরে নেওয়া হবে না।
+  if(tbls.length>=2){
+    const qr=await parseQuestionOnly(f);
+    const atbl=tbls.find(t=>/Answer\s*Sheet|Q\s*No\.?\s*An\s*s|Explanation/i.test(cellCsvText(t)) && !/(?:^|\s)1\s*[\.\)]/.test(cellCsvText(t).slice(0,1200))) || tbls[1];
+    const aMap=new Map();
+    kids(atbl).filter(k=>k.localName==='tr').forEach(tr=>{
+      const c=kids(tr).filter(k=>k.localName==='tc');
+      if(c.length<2)return;
+      const n=Number((cellCsvText(c[0]).match(/\d+/)||[])[0]);
+      if(!n)return;
+      const am=cellCsvText(c[1]).match(/[A-Da-d]/);
+      const ex=c[2]?cellCsvText(c[2]):'';
+      aMap.set(n,{ans:am?'ABCD'.indexOf(am[0].toUpperCase()):null,ex});
+    });
+    const qs=[];
+    for(const [n,q] of [...qr.map.entries()].sort((a,b)=>a[0]-b[0])){
+      const a=aMap.get(n);
+      if(!a){addIssue(n,'Answer');qs.push({n,q:q.q,o:q.o,ans:null,ex:[{t:''}]});continue;}
+      if(a.ans===null)addIssue(n,'Answer');
+      qs.push({n,q:q.q,o:q.o,ans:a.ans,ex:[{t:a.ex||''}]});
+    }
+    qr.bad.forEach(x=>addIssue(x.n,x.kind.join(', ')));
+    return {qs,issues,title:qr.title,source:'subset'};
+  }
+  throw new Error('এই Word ফাইলের প্রশ্ন কাঠামো শনাক্ত করা যায়নি: '+f.name);
+}
+
+function pairStem(name){
+  return name.replace(/\.docx$/i,'').replace(/\b(question|questions|answer|answers|ans)\b/gi,'').replace(/set[-_ ]?[a-z0-9]+/gi,'').replace(/[\s_-]+/g,'').toLowerCase();
+}
+
+async function buildCsvFromQuestionAnswer(qfiles,afiles){
+  const qGroups=[],aGroups=[];
+  for(const f of qfiles){try{qGroups.push({f,r:await parseQuestionOnly(f)})}catch(e){qGroups.push({f,error:e.message})}}
+  for(const f of afiles){try{aGroups.push({f,r:await parseAnswerOnly(f)})}catch(e){aGroups.push({f,error:e.message})}}
+  const usedA=new Set(), merged=[],issues=[];
+  for(const qg of qGroups){
+    if(qg.error){issues.push('Question file '+qg.f.name+': '+qg.error);continue;}
+    let ai=aGroups.findIndex((ag,i)=>!usedA.has(i)&&!ag.error&&pairStem(ag.f.name)===pairStem(qg.f.name));
+    if(ai<0)ai=aGroups.findIndex((ag,i)=>!usedA.has(i)&&!ag.error);
+    if(ai<0){issues.push('Answer file পাওয়া যায়নি: '+qg.f.name);continue;}
+    usedA.add(ai); const ag=aGroups[ai];
+    for(const [n,q] of qg.r.map){
+      const a=ag.r.map.get(n);
+
+      // Answer না থাকলেও প্রশ্নটি বাদ যাবে না।
+      // Answer cell blank থাকবে এবং সমস্যা report-এ দেখানো হবে।
+      if(!a){
+        issues.push(`Question ${n}: Answer missing (${qg.f.name})`);
+        merged.push({q:q.q,o:q.o,ans:null,ex:[]});
+      }else{
+        if(a.ans===null || a.ans===undefined){
+          issues.push(`Question ${n}: Answer invalid/missing (${ag.f.name})`);
+        }
+        merged.push({q:q.q,o:q.o,ans:a.ans,ex:a.ex||[]});
+      }
+    }
+    if(qg.r.bad.length)issues.push(`${qg.f.name}: Option/Question missing — ${qg.r.bad.map(x=>x.n+' ('+x.kind.join('; ')+')').join(', ')}`);
+    if(ag.r.bad.length)issues.push(`${ag.f.name}: Answer missing — ${ag.r.bad.join(', ')}`);
+  }
+  aGroups.forEach((ag,i)=>{if(!usedA.has(i))issues.push('Unpaired Answer file: '+ag.f.name)});
+  return {qs:merged,issues};
+}
+
+function isCsvHeaderRow(q){
+  if(!q)return false;
+  const norm=v=>String(v??'').replace(/\$+/g,'').replace(/\s+/g,' ').trim().toLowerCase();
+  const vals=[latexSegs(q.q),...(q.o||[]).map(latexSegs)].map(norm);
+  return vals[0]==='question' && vals[1]==='option-a' && vals[2]==='option-b' && vals[3]==='option-c' && vals[4]==='option-d';
+}
+
+function buildCsvRows(qs){
+  const rows=[['title','type','option1','option2','option3','option4','answer','explanation']];
+  qs.filter(q=>!isCsvHeaderRow(q)).forEach(q=>rows.push([
+    latexSegs(q.q),
+    'MCQ',
+    ...q.o.map(latexSegs),
+    (q.ans===null || q.ans===undefined || Number.isNaN(Number(q.ans))) ? '' : Number(q.ans)+1,
+    latexSegs(q.ex||[])
+  ]));
+  return rows;
+}
+
+function downloadCsvRows(rows,filename){
+  const blob=new Blob(['\ufeff'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});
+  save(filename,blob);
+}
+
+function csvDownload(qs){
+  downloadCsvRows(buildCsvRows(qs),'MCQ-Questions.csv');
+}
+
+function csvReverseDownload(qs){
+  const rows=buildCsvRows(qs);
+  const header=rows[0];
+  const data=rows.slice(1).reverse();
+  // Header অপরিবর্তিত থাকবে; শুধু সব data row বিপরীত ক্রমে যাবে।
+  downloadCsvRows([header,...data],'MCQ-Questions-Reverse.csv');
+}
+
+async function refreshCsvGenerator(){
+  const master=document.getElementById('csvMasterFiles').files;
+  const qf=document.getElementById('csvQuestionFiles').files;
+  const af=document.getElementById('csvAnswerFiles').files;
+  const cf=document.getElementById('csvCombinedFiles').files;
+  const report=document.getElementById('csvReport'), btn=document.getElementById('csvGenerate');
+  btn.disabled=true; document.getElementById('csvReverse').disabled=true; CSV_MASTER_Q=[];
+  const lines=[];
+
+  if(master.length){
+    const r=await parseCsvMasterFiles([...master]);
+    CSV_MASTER_Q.push(...r.qs);
+    lines.push(`Master: ${r.qs.length}টি প্রশ্ন`);
+    lines.push(...r.issues.map(x=>'⚠️ '+x));
+  }
+
+  if(qf.length||af.length){
+    if(!qf.length||!af.length){
+      lines.push('⚠️ Question ও Answer — দুটোই দিতে হবে।');
+    }else{
+      const r=await buildCsvFromQuestionAnswer([...qf],[...af]);
+      CSV_MASTER_Q.push(...r.qs);
+      lines.push(`Question + Answer: ${r.qs.length}টি প্রশ্ন CSV-এর জন্য প্রস্তুত`);
+      lines.push(...r.issues.map(x=>'⚠️ '+x));
+    }
+  }
+
+  if(cf.length){
+    for(const f of [...cf]){
+      try{
+        // একই Word ফাইলে Question + Answer থাকলে আলাদা pairing দরকার নেই।
+        // parseUploadedForCsv প্রশ্ন, অপশন, Answer এবং Explanation একসাথে নেয়।
+        const r=await parseUploadedForCsv(f);
+        CSV_MASTER_Q.push(...r.qs);
+        lines.push(`একই ফাইলে Question + Answer: ${f.name} — ${r.qs.length}টি প্রশ্ন CSV-এর জন্য প্রস্তুত`);
+        lines.push(...r.issues.map(x=>'⚠️ '+f.name+': '+x));
+      }catch(e){
+        lines.push(`⚠️ ${f.name}: ${e.message}`);
+      }
+    }
+  }
+
+  report.textContent=lines.length?lines.join('\n'):'CSV তৈরি করতে ফাইল আপলোড করুন।';
+  if(CSV_MASTER_Q.length){btn.disabled=false;document.getElementById('csvReverse').disabled=false;}
+}
+
+document.getElementById('csvMasterFiles').onchange=async e=>{document.getElementById('csvMasterInfo').textContent=csvFileLabel([...e.target.files]);await refreshCsvGenerator()};
+document.getElementById('csvQuestionFiles').onchange=async e=>{document.getElementById('csvQuestionInfo').textContent=csvFileLabel([...e.target.files]);await refreshCsvGenerator()};
+document.getElementById('csvAnswerFiles').onchange=async e=>{document.getElementById('csvAnswerInfo').textContent=csvFileLabel([...e.target.files]);await refreshCsvGenerator()};
+document.getElementById('csvCombinedFiles').onchange=async e=>{document.getElementById('csvCombinedInfo').textContent=csvFileLabel([...e.target.files]);await refreshCsvGenerator()};
+document.getElementById('csvGenerate').onclick=()=>csvDownload(CSV_MASTER_Q);
+document.getElementById('csvReverse').onclick=()=>csvReverseDownload(CSV_MASTER_Q);
+
 /* ---------- UI ---------- */
 async function save(name,blob){
   let dl=null;try{dl=window.claude?await window.claude.use('downloads'):null}catch(e){}
@@ -503,16 +1047,22 @@ const csvCell=v=>{
 };
 function makeCsv(){
   const rows=[['title','type','option1','option2','option3','option4','answer','explanation']];
-  Q.slice().reverse().forEach(q=>rows.push([latexSegs(q.q),'MCQ',...q.o.map(latexSegs),q.ans+1,latexSegs(q.ex)]));
+  Q.slice().reverse().filter(q=>!isCsvHeaderRow(q)).forEach(q=>rows.push([latexSegs(q.q),'MCQ',...q.o.map(latexSegs),q.ans+1,latexSegs(q.ex)]));
   return new Blob(['\ufeff'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});
 }
 async function load(f){
-  if(!f)return;$('go').disabled=true;$('csv').disabled=true;$('out').hidden=true;$('info').className='msg';$('info').textContent='পড়া হচ্ছে...';
+  if(!f)return;CURRENT_UPLOAD_FILE=f;$('go').disabled=true;$('csv').disabled=true;$('out').hidden=true;$('info').className='msg';$('info').textContent='পড়া হচ্ছে...';
   try{
     const r=await parseMaster(f);Q=r.qs;
     const m=r.title.match(/^\s*(\S+)\s*\(.*?\)\s*(.*)$/);
     if(m){$('code').value=m[1];if(m[2])$('name').value=m[2].trim();}
-    $('info').textContent=`✔ ${f.name}: ${Q.length}টি প্রশ্ন পাওয়া গেছে (${r.source==='subset'?'Single/Subset Word':'Master Word'})`+(r.bad.length?` (উত্তর/অপশন অসম্পূর্ণ থাকায় বাদ: প্রশ্ন নং ${r.bad.join(', ')})`:'');
+    let msg=`✔ ${f.name}: ${Q.length}টি প্রশ্ন পাওয়া গেছে (${r.source==='subset'?'Single/Subset Word':'Master Word'})`;
+    try{
+      const cr=await parseUploadedForCsv(f);
+      msg+=`\nCSV: ${cr.qs.length}টি প্রশ্ন প্রস্তুত`;
+      if(cr.issues.length)msg+=`\n`+cr.issues.map(x=>'⚠️ '+f.name+': Option/Question/Answer missing — '+x).join('\n');
+    }catch(csvErr){msg+=`\n⚠️ CSV বিশ্লেষণ: ${csvErr.message}`;}
+    $('info').textContent=msg;
     if(r.bad.length)$('info').className='msg er';
     $('go').disabled=!Q.length;$('csv').disabled=!Q.length;
   }catch(e){$('csv').disabled=true;$('info').className='msg er';$('info').textContent='ফাইল পড়া যায়নি: '+e.message;}
@@ -634,10 +1184,16 @@ $('go').onclick=async()=>{
   $('go').disabled=false;
 };
 $('csv').onclick=async()=>{
-  if(!Q.length)return;
-  const code=$('code').value.trim()||'B-01',name=$('name').value.trim()||'Brahmaputra';
-  await save(`${code}__${name}__MCQ_reverse.csv`,makeCsv());
-  $('st').className='msg';$('st').textContent='\u2714 '+Q.length+'\u099f\u09bf \u09aa\u09cd\u09b0\u09b6\u09cd\u09a8 \u09ac\u09bf\u09aa\u09b0\u09c0\u09a4 \u0995\u09cd\u09b0\u09ae\u09c7 CSV \u09a4\u09c8\u09b0\u09bf \u09b9\u09af\u09bc\u09c7\u099b\u09c7';
+  if(!CURRENT_UPLOAD_FILE)return;
+  try{
+    $('csv').disabled=true;$('st').className='msg';$('st').textContent='CSV তৈরি হচ্ছে...';
+    const r=await parseUploadedForCsv(CURRENT_UPLOAD_FILE);
+    const code=$('code').value.trim()||'B-01',name=$('name').value.trim()||'Brahmaputra';
+    await save(`${code}__${name}__MCQ_reverse.csv`,new Blob(['\ufeff'+[['title','type','option1','option2','option3','option4','answer','explanation'],...r.qs.slice().reverse().filter(q=>!isCsvHeaderRow(q)).map(q=>[latexSegs(q.q),'MCQ',...q.o.map(latexSegs),(q.ans===null||q.ans===undefined)?'':Number(q.ans)+1,latexSegs(q.ex||[])])].map(row=>row.map(csvCell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));
+    $('st').textContent=`✔ ${r.qs.length}টি প্রশ্নসহ পুরো CSV তৈরি হয়েছে`+(r.issues.length?`\n⚠️ ${r.issues.length}টি সমস্যা পাওয়া গেছে—যেসব field missing, সেগুলো CSV-তে blank রাখা হয়েছে।`:'');
+    $('info').textContent += r.issues.length?`\n\nCSV রিপোর্ট:\n`+r.issues.map(x=>'⚠️ '+CURRENT_UPLOAD_FILE.name+': '+x).join('\n'):'';
+  }catch(e){$('st').className='msg er';$('st').textContent='CSV তৈরি করা যায়নি: '+e.message;}
+  $('csv').disabled=false;
 };
 $('zip').onclick=async()=>{const z=new JSZip();files.forEach(f=>z.file(f.name,f.blob));save(`${$('code').value.trim()||'B-01'}__Sets.zip`,await z.generateAsync({type:'blob'}))};
 </script></body></html>
