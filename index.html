@@ -396,18 +396,41 @@ async function parseMaster(f){
   const flat=tbls.find(tbl=>kids(tbl).some(tr=>tr.localName==='tr'&&kids(tr).filter(k=>k.localName==='tc').length>=8));
   if(flat){
     const qs=[],bad=[];
-    kids(flat).filter(k=>k.localName==='tr').forEach(tr=>{
+    kids(flat).filter(k=>k.localName==='tr').forEach((tr,rowIdx)=>{
       const c=kids(tr).filter(k=>k.localName==='tc');
       if(c.length<8)return;
       const q=segs(c[1]);
       if(!q.length||/^option/i.test(plain(segs(c[2]))))return;
+
+      // Master Word-এ কোনো option/answer ফাঁকা থাকলেও প্রশ্নটি বাদ দেওয়া যাবে না।
+      // শুধু missing অংশ blank থাকবে এবং bad report-এ দেখানো হবে।
       const o=[2,3,4,5].map(i=>segs(c[i]));
       const a=segs(c[7]),m=plain(a).match(/^\s*([A-Da-d])\s*[;；]/);
-      if(!m||o.some(x=>!x.length)){bad.push(qs.length+bad.length+1);return;}
-      a[0].t=a[0].t.replace(/^\s*[A-Da-d]\s*[;；]\s*/,'');
-      qs.push({q,o,ans:'ABCD'.indexOf(m[1].toUpperCase()),ex:a.filter(s=>s.t)});
+      const n=Number((plain(segs(c[0])).match(/\d+/)||[])[0])||rowIdx;
+
+      if(!q.length)bad.push(n);
+      ['A','B','C','D'].forEach((L,i)=>{if(!o[i].length)bad.push(n);});
+      if(!m)bad.push(n);
+
+      if(a.length&&m)a[0].t=a[0].t.replace(/^\s*[A-Da-d]\s*[;；]\s*/,'');
+
+      // Explanation cell-এর ভেতরে যদি আসল Word table থাকে, তার XML আলাদাভাবে
+      // সংরক্ষণ করা হবে—যাতে Subset Word তৈরির সময় সেটি আবার table হিসেবেই থাকে।
+      let exTableXml='';
+      const nestedTbl=kids(c[7]).find(k=>k.localName==='tbl');
+      if(nestedTbl){
+        exTableXml=new XMLSerializer().serializeToString(nestedTbl);
+      }
+
+      qs.push({
+        q,
+        o,
+        ans:m?'ABCD'.indexOf(m[1].toUpperCase()):null,
+        ex:a.filter(s=>s.t),
+        exTableXml
+      });
     });
-    if(qs.length)return{qs,bad,title,source:'master'};
+    if(qs.length)return{qs,bad:[...new Set(bad)].sort((a,b)=>a-b),title,source:'master'};
   }
 
   // Format 2: generated Single/Subset Word — question table + separate answer/explanation table.
@@ -492,6 +515,20 @@ function fillCell(d,tc,sg){
     r.append(rp,t);p.appendChild(r);
   }
 }
+function fillExplanationCell(d,tc,sg,tableXml){
+  // প্রথমে সাধারণ explanation text বসাই।
+  fillCell(d,tc,sg||[]);
+  // Source Master Word-এর explanation-এ table থাকলে সেটি সরাসরি Word table
+  // হিসেবে একই explanation cell-এর শেষে যোগ করি।
+  if(tableXml){
+    try{
+      const holder=d.createElementNS(NS,'w:x');
+      holder.innerHTML=tableXml;
+      const node=holder.firstElementChild;
+      if(node && node.localName==='tbl') tc.appendChild(d.importNode(node,true));
+    }catch(e){}
+  }
+}
 async function build(order,letter,o){
   const z=await JSZip.loadAsync(TPL,{base64:true});
   const d=new DOMParser().parseFromString(await z.file('word/document.xml').async('string'),'application/xml');
@@ -507,7 +544,7 @@ async function build(order,letter,o){
     const opts=perm.map(p=>q.o[p]),a='ABCD'[perm.indexOf(q.ans)];key.push(a);
     qx+=qRow(i+1,q.q,opts);
     const r=tpl.cloneNode(true),c=kids(r).filter(k=>k.localName==='tc');
-    fillCell(d,c[0],[{t:String(i+1)}]);fillCell(d,c[1],[{t:a}]);fillCell(d,c[2],q.ex);t2.appendChild(r);
+    fillCell(d,c[0],[{t:String(i+1)}]);fillCell(d,c[1],[{t:a}]);fillExplanationCell(d,c[2],q.ex,q.exTableXml);t2.appendChild(r);
   });
   imp(qx).forEach(n=>t1.appendChild(n));
   const ts=[...d.getElementsByTagNameNS(NS,'t')],x=i=>ts[i]&&ts[i].textContent;
@@ -526,7 +563,7 @@ async function build(order,letter,o){
 }
 
 /* ---------- Separate CSV Generator ---------- */
-let CSV_MASTER_Q=[], CSV_QFILES=[], CSV_AFILES=[];
+let CSV_MASTER_Q=[], CSV_QFILES=[], CSV_AFILES=[], CSV_REFRESH_SEQ=0;
 
 // ---------- Word equation -> KaTeX (CSV only) ----------
 const MNS='http://schemas.openxmlformats.org/officeDocument/2006/math';
@@ -990,49 +1027,80 @@ function csvReverseDownload(qs){
 }
 
 async function refreshCsvGenerator(){
-  const master=document.getElementById('csvMasterFiles').files;
-  const qf=document.getElementById('csvQuestionFiles').files;
-  const af=document.getElementById('csvAnswerFiles').files;
-  const cf=document.getElementById('csvCombinedFiles').files;
-  const report=document.getElementById('csvReport'), btn=document.getElementById('csvGenerate');
-  btn.disabled=true; document.getElementById('csvReverse').disabled=true; CSV_MASTER_Q=[];
+  const seq=++CSV_REFRESH_SEQ;
+  const master=[...document.getElementById('csvMasterFiles').files];
+  const qf=[...document.getElementById('csvQuestionFiles').files];
+  const af=[...document.getElementById('csvAnswerFiles').files];
+  const cf=[...document.getElementById('csvCombinedFiles').files];
+  const report=document.getElementById('csvReport');
+  const btn=document.getElementById('csvGenerate');
+  const reverse=document.getElementById('csvReverse');
+  const collected=[];
   const lines=[];
 
-  if(master.length){
-    const r=await parseCsvMasterFiles([...master]);
-    CSV_MASTER_Q.push(...r.qs);
-    lines.push(`Master: ${r.qs.length}টি প্রশ্ন`);
-    lines.push(...r.issues.map(x=>'⚠️ '+x));
-  }
+  btn.disabled=true;
+  reverse.disabled=true;
+  report.textContent='CSV ফাইল বিশ্লেষণ হচ্ছে...';
 
-  if(qf.length||af.length){
-    if(!qf.length||!af.length){
-      lines.push('⚠️ Question ও Answer — দুটোই দিতে হবে।');
-    }else{
-      const r=await buildCsvFromQuestionAnswer([...qf],[...af]);
-      CSV_MASTER_Q.push(...r.qs);
-      lines.push(`Question + Answer: ${r.qs.length}টি প্রশ্ন CSV-এর জন্য প্রস্তুত`);
+  try{
+    // CSV Master upload — completely independent of the main Master upload.
+    if(master.length){
+      const r=await parseCsvMasterFiles(master);
+      collected.push(...r.qs);
+      lines.push(`CSV Master: ${r.qs.length}টি প্রশ্ন`);
       lines.push(...r.issues.map(x=>'⚠️ '+x));
     }
-  }
 
-  if(cf.length){
-    for(const f of [...cf]){
-      try{
-        // একই Word ফাইলে Question + Answer থাকলে আলাদা pairing দরকার নেই।
-        // parseUploadedForCsv প্রশ্ন, অপশন, Answer এবং Explanation একসাথে নেয়।
-        const r=await parseUploadedForCsv(f);
-        CSV_MASTER_Q.push(...r.qs);
-        lines.push(`একই ফাইলে Question + Answer: ${f.name} — ${r.qs.length}টি প্রশ্ন CSV-এর জন্য প্রস্তুত`);
-        lines.push(...r.issues.map(x=>'⚠️ '+f.name+': '+x));
-      }catch(e){
-        lines.push(`⚠️ ${f.name}: ${e.message}`);
+    // Separate Question + Answer uploads.
+    if(qf.length || af.length){
+      if(!qf.length){
+        lines.push('⚠️ Question Word file দিন।');
+      }else if(!af.length){
+        // Question-only is still exportable; Answer/Explanation remain blank.
+        for(const f of qf){
+          try{
+            const r=await parseQuestionOnly(f);
+            for(const [n,q] of r.map) collected.push({n,q:q.q,o:q.o,ans:null,ex:[]});
+            lines.push(`Question: ${f.name} — ${r.map.size}টি প্রশ্ন প্রস্তুত (Answer file দেওয়া হয়নি)`);
+            lines.push(...r.bad.map(x=>`⚠️ ${f.name}: ${x.n} (${x.kind.join(', ')})`));
+          }catch(e){
+            lines.push(`⚠️ Question file ${f.name}: ${e.message}`);
+          }
+        }
+      }else{
+        const r=await buildCsvFromQuestionAnswer(qf,af);
+        collected.push(...r.qs);
+        lines.push(`Question + Answer: ${r.qs.length}টি প্রশ্ন CSV-এর জন্য প্রস্তুত`);
+        lines.push(...r.issues.map(x=>'⚠️ '+x));
       }
     }
+
+    // A single Word file containing both Question and Answer.
+    if(cf.length){
+      for(const f of cf){
+        try{
+          const r=await parseUploadedForCsv(f);
+          collected.push(...r.qs);
+          lines.push(`Question + Answer একই ফাইলে: ${f.name} — ${r.qs.length}টি প্রশ্ন প্রস্তুত`);
+          lines.push(...r.issues.map(x=>'⚠️ '+f.name+': '+x));
+        }catch(e){
+          lines.push(`⚠️ ${f.name}: ${e.message}`);
+        }
+      }
+    }
+  }catch(e){
+    lines.push('⚠️ CSV Generator: '+(e&&e.message?e.message:e));
   }
 
-  report.textContent=lines.length?lines.join('\n'):'CSV তৈরি করতে ফাইল আপলোড করুন।';
-  if(CSV_MASTER_Q.length){btn.disabled=false;document.getElementById('csvReverse').disabled=false;}
+  // If the user changed an upload while an older parse was still running,
+  // never let the older result overwrite the newest selection.
+  if(seq!==CSV_REFRESH_SEQ)return;
+
+  CSV_MASTER_Q=collected;
+  report.textContent=lines.length ? lines.join('\n') : 'CSV তৈরি করতে আলাদা Word file upload করুন।';
+  const usable=CSV_MASTER_Q.some(q=>q && q.q);
+  btn.disabled=!usable;
+  reverse.disabled=!usable;
 }
 
 document.getElementById('csvMasterFiles').onchange=async e=>{document.getElementById('csvMasterInfo').textContent=csvFileLabel([...e.target.files]);await refreshCsvGenerator()};
