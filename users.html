@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Dashboard · প্রশ্নপত্র সেট জেনারেটর</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;font-family:'Noto Sans Bengali','Kalpurush','Vrinda',system-ui,sans-serif;color:#f8fafc;background:linear-gradient(135deg,#111827,#312e81 52%,#0f766e);line-height:1.55}
+.wrap{max-width:1100px;margin:auto;padding:28px 16px 50px}
+.card{border:1px solid rgba(255,255,255,.20);border-radius:20px;background:rgba(255,255,255,.10);box-shadow:0 20px 55px rgba(0,0,0,.22);backdrop-filter:blur(18px);padding:20px;margin-bottom:16px}
+h1,h2{margin:0 0 8px}.mut{color:rgba(255,255,255,.70)}
+.top{display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap}
+.btn,button{border:0;border-radius:10px;padding:10px 14px;background:#fff;color:#312e81;font:inherit;font-weight:800;cursor:pointer;text-decoration:none}
+.btn.secondary,button.secondary{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.28)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.stat{padding:16px;border-radius:15px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14)}.stat b{display:block;font-size:1.6rem}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.toolbar input{flex:1;min-width:220px}
+input{height:44px;width:100%;border:1px solid rgba(255,255,255,.24);border-radius:10px;background:rgba(255,255,255,.08);color:#fff;padding:9px 11px;font:inherit;outline:none}input:focus{border-color:#fff}
+.users{display:grid;gap:10px;margin-top:14px}.user{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:14px;border-radius:14px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14)}
+.user-name{font-weight:800}.user-email{font-size:.85rem;color:rgba(255,255,255,.68)}.badge{display:inline-block;margin-left:7px;padding:3px 8px;border-radius:999px;font-size:.72rem;border:1px solid rgba(255,255,255,.22)}.active{color:#bbf7d0}.disabled{color:#fecaca}
+.actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}.actions button{padding:7px 10px;font-size:.82rem}.danger{background:#fecaca!important;color:#7f1d1d!important}.warn{background:#fde68a!important;color:#713f12!important}
+.empty{text-align:center;padding:28px;color:rgba(255,255,255,.65)}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;padding:18px;z-index:10}.modal[hidden],#dashboard[hidden],#denied[hidden]{display:none}
+.modal-box{width:min(560px,100%);background:#171b35;border:1px solid rgba(255,255,255,.18);border-radius:18px;padding:22px;box-shadow:0 25px 80px rgba(0,0,0,.45)}
+.form-grid{display:grid;gap:12px}.form-grid label{display:grid;gap:6px;color:rgba(255,255,255,.75);font-size:.85rem}.modal-actions{display:flex;gap:9px;justify-content:flex-end;margin-top:16px}
+.note{font-size:.82rem;color:#fde68a}.error{color:#fecaca;margin-top:8px}.success{color:#bbf7d0;margin-top:8px}
+pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.22);padding:12px;border-radius:10px;font-size:12px}
+@media(max-width:650px){.stats{grid-template-columns:1fr}.user{grid-template-columns:1fr}.actions{justify-content:flex-start}.wrap{padding:18px 12px 35px}}
+</style>
+</head>
+<body>
+
+<!-- Non-admin users never get the dashboard. -->
+<div id="denied" class="wrap" hidden>
+  <section class="card">
+    <h1>🔒 Admin Access Required</h1>
+    <p class="mut">এই পেজটি শুধু <b>admin@mcq.local</b> account দিয়ে সাধারণ Login করার পর ব্যবহার করা যাবে।</p>
+    <a class="btn secondary" href="index.html">← Login Page</a>
+  </section>
+</div>
+
+<!-- Admin dashboard -->
+<div id="dashboard" class="wrap" hidden>
+  <section class="card">
+    <div class="top">
+      <div>
+        <h1>👑 Admin Dashboard</h1>
+        <div class="mut">User account management</div>
+      </div>
+      <div>
+        <span id="adminName" class="mut"></span>
+        <a class="btn secondary" href="index.html">← Question Generator</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="stat"><span class="mut">Total Users</span><b id="totalCount">0</b></div>
+    <div class="stat"><span class="mut">Active</span><b id="activeCount">0</b></div>
+    <div class="stat"><span class="mut">Disabled</span><b id="disabledCount">0</b></div>
+  </section>
+
+  <section class="card">
+    <div class="toolbar">
+      <input id="searchBox" type="search" placeholder="Search name or email...">
+      <button id="createBtn">＋ Create User</button>
+      <button id="exportBtn" class="secondary">Export JSON</button>
+      <button id="resetBtn" class="secondary">Reset</button>
+    </div>
+    <div id="message"></div>
+    <div id="userList" class="users"></div>
+  </section>
+</div>
+
+<!-- Create/Edit modal -->
+<div id="userModal" class="modal" hidden>
+  <div class="modal-box">
+    <h2 id="modalTitle">Create User</h2>
+    <div class="form-grid">
+      <label>Name<input id="formName" type="text" placeholder="Teacher 3"></label>
+      <label>Email<input id="formEmail" type="email" placeholder="teacher3@mcq.local"></label>
+      <label>Password<input id="formPassword" type="password" placeholder="Password"></label>
+      <label id="keepWrap"><input id="keepPassword" type="checkbox" checked> Edit-এর সময় পুরোনো password রাখুন</label>
+    </div>
+    <p class="note">Admin account delete বা disable করা যাবে না।</p>
+    <div class="modal-actions">
+      <button id="cancelBtn" class="secondary">Cancel</button>
+      <button id="saveBtn">Save User</button>
+    </div>
+  </div>
+</div>
+
+<script id="users-data" type="application/json">
+[
+  {"name":"Admin","email":"admin@mcq.local","passwordHash":"3b04eb2105af3873bb4d3290c9af49a90fad312bad17e2b1918afc1e64658796"},
+  {"name":"Teacher One","email":"teacher1@mcq.local","passwordHash":"1bd78661e2e00fcbb62e41a0fd3e166262534df563454972a3b926355f11631c"},
+  {"name":"Teacher Two","email":"teacher2@mcq.local","passwordHash":"2bbdb8daaeae4b9a6c8d56997ea3bcfb85f132b6a003c611ac6ad5259f590b64"},
+  {"name":"Editor","email":"editor@mcq.local","passwordHash":"e24ddcaa0314c981d1b37ab31de3f7957e00a0a90028d14128fbe7d920a5dd57"},
+  {"name":"Whalid","email":"whalidhassan.web@gmail.com","passwordHash":"7a6805d53159ce71341a0a3c5a2f02e7a013e253f437055fce5c46ad7be8b12b"}
+]
+</script>
+
+<script>
+const ADMIN_EMAIL = 'admin@mcq.local';
+const SESSION_KEY = 'mcq_admin_session_v1';
+const STORAGE_KEY = 'mcq_users_admin_dashboard_v2';
+const DEFAULT_USERS = JSON.parse(document.getElementById('users-data').textContent);
+
+let users = [];
+let editingEmail = null;
+
+const $ = (id) => document.getElementById(id);
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function isAdminSession() {
+  try {
+    return normalizeEmail(localStorage.getItem(SESSION_KEY)) === ADMIN_EMAIL;
+  } catch (e) {
+    return false;
+  }
+}
+
+function cloneDefaults() {
+  return DEFAULT_USERS.map(u => ({ ...u, disabled: !!u.disabled }));
+}
+
+function loadUsers() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+  } catch (e) {}
+
+  users = Array.isArray(saved) && saved.length ? saved : cloneDefaults();
+
+  // Always protect/restore the Admin account.
+  const adminDefault = DEFAULT_USERS.find(u => normalizeEmail(u.email) === ADMIN_EMAIL);
+  const adminIndex = users.findIndex(u => normalizeEmail(u.email) === ADMIN_EMAIL);
+
+  if (adminDefault && adminIndex === -1) {
+    users.unshift({ ...adminDefault, disabled: false });
+  } else if (adminIndex >= 0) {
+    users[adminIndex].email = ADMIN_EMAIL;
+    users[adminIndex].disabled = false;
+    if (!users[adminIndex].passwordHash) users[adminIndex].passwordHash = adminDefault.passwordHash;
+  }
+
+  saveUsers();
+}
+
+function saveUsers() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(users));
+  } catch (e) {}
+}
+
+function sendUsers() {
+  // This is important: index.html uses users.html as a hidden iframe for login.
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'mcq-users', users }, '*');
+    }
+  } catch (e) {}
+
+  try {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({ type: 'mcq-users', users }, '*');
+    }
+  } catch (e) {}
+}
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[c]));
+}
+
+function showMessage(text, type = '') {
+  $('message').className = type;
+  $('message').textContent = text;
+  if (text) setTimeout(() => { $('message').textContent = ''; }, 2500);
+}
+
+function render() {
+  const q = normalizeEmail($('searchBox').value);
+  const total = users.length;
+  const disabled = users.filter(u => !!u.disabled).length;
+  const active = total - disabled;
+
+  $('totalCount').textContent = total;
+  $('activeCount').textContent = active;
+  $('disabledCount').textContent = disabled;
+
+  const filtered = users.filter(u => {
+    const name = String(u.name || '').toLowerCase();
+    const email = normalizeEmail(u.email);
+    return !q || name.includes(q) || email.includes(q);
+  });
+
+  if (!filtered.length) {
+    $('userList').innerHTML = '<div class="empty">কোনো User পাওয়া যায়নি।</div>';
+    return;
+  }
+
+  $('userList').innerHTML = filtered.map(u => {
+    const email = normalizeEmail(u.email);
+    const admin = email === ADMIN_EMAIL;
+    const disabled = !!u.disabled;
+
+    return `
+      <div class="user">
+        <div>
+          <div class="user-name">
+            ${esc(u.name || 'User')}
+            ${admin ? '<span class="badge">ADMIN</span>' : ''}
+            <span class="badge ${disabled ? 'disabled' : 'active'}">${disabled ? 'Disabled' : 'Active'}</span>
+          </div>
+          <div class="user-email">${esc(email)}</div>
+        </div>
+        <div class="actions">
+          <button class="secondary edit-btn" data-email="${encodeURIComponent(email)}">✏️ Edit</button>
+          ${admin ? '' : `<button class="${disabled ? '' : 'warn'} toggle-btn" data-email="${encodeURIComponent(email)}">${disabled ? '✓ Enable' : '⏸ Disable'}</button>`}
+          ${admin ? '' : `<button class="danger delete-btn" data-email="${encodeURIComponent(email)}">🗑 Delete</button>`}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function sha256Hex(text) {
+  const bytes = new TextEncoder().encode(String(text));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+function openCreate() {
+  editingEmail = null;
+  $('modalTitle').textContent = 'Create User';
+  $('formName').value = '';
+  $('formEmail').value = '';
+  $('formPassword').value = '';
+  $('formEmail').disabled = false;
+  $('keepWrap').style.display = 'none';
+  $('keepPassword').checked = false;
+  $('userModal').hidden = false;
+  $('formName').focus();
+}
+
+function openEdit(email) {
+  const user = users.find(u => normalizeEmail(u.email) === email);
+  if (!user) return;
+
+  editingEmail = email;
+  $('modalTitle').textContent = 'Edit User';
+  $('formName').value = user.name || '';
+  $('formEmail').value = email;
+  $('formEmail').disabled = email === ADMIN_EMAIL;
+  $('formPassword').value = '';
+  $('keepWrap').style.display = email === ADMIN_EMAIL ? 'none' : 'block';
+  $('keepPassword').checked = true;
+  $('userModal').hidden = false;
+}
+
+function closeModal() {
+  $('userModal').hidden = true;
+  editingEmail = null;
+}
+
+$('createBtn').addEventListener('click', openCreate);
+$('cancelBtn').addEventListener('click', closeModal);
+$('searchBox').addEventListener('input', render);
+
+$('userList').addEventListener('click', async (event) => {
+  const edit = event.target.closest('.edit-btn');
+  const toggle = event.target.closest('.toggle-btn');
+  const del = event.target.closest('.delete-btn');
+
+  if (edit) openEdit(decodeURIComponent(edit.dataset.email));
+
+  if (toggle) {
+    const email = decodeURIComponent(toggle.dataset.email);
+    const user = users.find(u => normalizeEmail(u.email) === email);
+    if (!user || email === ADMIN_EMAIL) return;
+    user.disabled = !user.disabled;
+    saveUsers();
+    sendUsers();
+    render();
+    showMessage(user.disabled ? 'User disabled হয়েছে।' : 'User enabled হয়েছে।', 'success');
+  }
+
+  if (del) {
+    const email = decodeURIComponent(del.dataset.email);
+    if (email === ADMIN_EMAIL) return;
+    const user = users.find(u => normalizeEmail(u.email) === email);
+    if (!user) return;
+    if (!confirm(`${user.name || email} account delete করবেন?`)) return;
+    users = users.filter(u => normalizeEmail(u.email) !== email);
+    saveUsers();
+    sendUsers();
+    render();
+    showMessage('User deleted হয়েছে।', 'success');
+  }
+});
+
+$('saveBtn').addEventListener('click', async () => {
+  const name = $('formName').value.trim() || 'User';
+  const newEmail = normalizeEmail($('formEmail').value);
+  const password = $('formPassword').value;
+
+  if (!newEmail) {
+    showMessage('Email দিন।', 'error');
+    return;
+  }
+
+  if (editingEmail === null) {
+    if (users.some(u => normalizeEmail(u.email) === newEmail)) {
+      showMessage('এই Email আগে থেকেই আছে।', 'error');
+      return;
+    }
+    if (!password) {
+      showMessage('নতুন User-এর Password দিন।', 'error');
+      return;
+    }
+
+    users.push({
+      name,
+      email: newEmail,
+      passwordHash: await sha256Hex(password),
+      disabled: false
+    });
+
+    closeModal();
+    saveUsers();
+    sendUsers();
+    render();
+    showMessage('নতুন User তৈরি হয়েছে।', 'success');
+    return;
+  }
+
+  const user = users.find(u => normalizeEmail(u.email) === editingEmail);
+  if (!user) return;
+
+  if (editingEmail !== ADMIN_EMAIL && newEmail !== editingEmail && users.some(u => normalizeEmail(u.email) === newEmail)) {
+    showMessage('এই Email আগে থেকেই আছে।', 'error');
+    return;
+  }
+
+  user.name = name;
+
+  if (editingEmail !== ADMIN_EMAIL) {
+    user.email = newEmail;
+  } else {
+    user.email = ADMIN_EMAIL;
+    user.disabled = false;
+  }
+
+  if (password) {
+    user.passwordHash = await sha256Hex(password);
+  }
+
+  closeModal();
+  saveUsers();
+  sendUsers();
+  render();
+  showMessage('User updated হয়েছে।', 'success');
+});
+
+$('exportBtn').addEventListener('click', () => {
+  const clean = users.map(({ name, email, passwordHash, disabled }) => ({
+    name, email, passwordHash, ...(disabled ? { disabled: true } : {})
+  }));
+  const blob = new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'users.json';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+$('resetBtn').addEventListener('click', () => {
+  if (!confirm('সব User list default অবস্থায় ফিরিয়ে দিতে চান?')) return;
+  users = cloneDefaults();
+  saveUsers();
+  sendUsers();
+  render();
+  showMessage('User list reset হয়েছে।', 'success');
+});
+
+// Send user data even when this page is loaded invisibly as an iframe by index.html.
+loadUsers();
+sendUsers();
+setTimeout(sendUsers, 250);
+setTimeout(sendUsers, 800);
+
+if (isAdminSession()) {
+  $('dashboard').hidden = false;
+  $('adminName').textContent = 'Admin · ' + ADMIN_EMAIL;
+  render();
+} else {
+  $('denied').hidden = false;
+}
+</script>
+</body>
+</html>
