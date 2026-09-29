@@ -157,7 +157,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <main id="app" hidden>
 <div class="topbar"><div class="headcopy"><h1>📝 প্রশ্নপত্র সেট জেনারেটর</h1>
 <p class="s">Master Word বা তৈরি করা Single/Subset Word (.docx) আপলোড করুন। Word সেট তৈরি, Single Word/ZIP download এবং সরাসরি CSV download করা যাবে।</p></div>
-<div class="userbox"><span id="who"></span><br><a href="users.html" target="_blank" rel="noopener">Users / ID Setup</a><button class="o" id="logout" type="button">Logout</button></div></div>
+<div class="userbox"><span id="who"></span><br><a id="adminUsersLink" href="users.html?admin=1" target="_blank" rel="noopener" hidden>👑 Admin Dashboard</a><button class="o" id="logout" type="button">Logout</button></div></div>
 
 <div class="card"><h2>১. Word ফাইল (.docx) — Master / Single Set / Subset</h2>
 <label class="drop" id="drop"><input type="file" id="file" accept=".docx">ফাইল বেছে নিন বা এখানে ছেড়ে দিন</label>
@@ -198,7 +198,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <div class="msg" id="csvReport">CSV তৈরি করতে Master অথবা Question + Answer ফাইল দিন।</div>
 <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
   <button id="csvGenerate" disabled>CSV তৈরি ও Download</button>
-  <button id="csvReverse" disabled class="o" title="Header অপরিবর্তিত রেখে সব data row বিপরীত ক্রমে Download">↕ CSV Reverse for LMS</button>
+  <button id="csvReverse" disabled class="o" title="Header অপরিবর্তিত রেখে সব data row বিপরীত ক্রমে Download">↕ CSV Reverse for LMS </button>
 </div>
 </div>
 
@@ -242,6 +242,8 @@ let CURRENT_UPLOAD_FILE=null;
 let AUTH_USERS=[];
 let USERS_READY=false;
 const AUTH_KEY='mcq_auth_session_v2';
+const ADMIN_EMAIL='admin@mcq.local';
+const ADMIN_SESSION_KEY='mcq_admin_session_v1';
 let authFails=0, authLockedUntil=0;
 const normEmail=v=>String(v||'').trim().toLowerCase();
 const authStore=()=>($('remember')&&$('remember').checked?localStorage:sessionStorage);
@@ -258,6 +260,7 @@ function normalizeUsers(users){
   })).filter(u=>u.email&&/^[a-f0-9]{64}$/.test(u.passwordHash));
 }
 function userByEmail(email){return AUTH_USERS.find(u=>u.email===normEmail(email));}
+function isAdminEmail(email){return normEmail(email)===ADMIN_EMAIL;}
 async function validCredentials(email,password){
   const u=userByEmail(email);if(!u)return false;
   return (await sha256Hex(password))===u.passwordHash;
@@ -298,6 +301,10 @@ function setLoginMessage(msg=''){
 function showApp(email){
   const u=userByEmail(email);
   $('loginPanel').hidden=true;$('app').hidden=false;$('who').textContent=u?`${u.name} · ${u.email}`:email;
+  const admin=isAdminEmail(email);
+  const adminLink=document.getElementById('adminUsersLink');
+  if(adminLink) adminLink.hidden=!admin;
+  try{if(admin)localStorage.setItem(ADMIN_SESSION_KEY,ADMIN_EMAIL);else localStorage.removeItem(ADMIN_SESSION_KEY)}catch(e){}
 }
 function finishLogin(email){
   clearAuthStores();
