@@ -693,12 +693,542 @@ function cellCsvText(tc){
   return walkChildren(tc).replace(/\s+/g,' ').trim();
 }
 
+// ---------- CSV Generator #3: rich Word text parser (ONLY separate upload) ----------
+// Main Word/Set Generator keeps using cellCsvText() unchanged.
+function csv3EqFindClose(s,openPos){
+  let depth=0;
+  for(let i=openPos;i<s.length;i++){
+    if(s[i]==='(')depth++;
+    else if(s[i]===')'){
+      depth--;
+      if(depth===0)return i;
+    }
+  }
+  return -1;
+}
+function csv3EqSplitArgs(s){
+  const out=[];
+  let start=0,p=0,b=0;
+  for(let i=0;i<s.length;i++){
+    const ch=s[i];
+    if(ch==='(')p++;
+    else if(ch===')')p=Math.max(0,p-1);
+    else if(ch==='{')b++;
+    else if(ch==='}')b=Math.max(0,b-1);
+    else if(ch===','&&p===0&&b===0){out.push(s.slice(start,i));start=i+1;}
+  }
+  out.push(s.slice(start));
+  return out;
+}
+function csv3EqLabel(raw){
+  const x=csv3ParseLegacyEqExpr(raw).trim();
+  if(!x)return '';
+  // KaTeX/LaTeX needs natural-language Bangla labels inside \\text{...}.
+  return /[\u0980-\u09FF]/u.test(x)?`\\text{${x}}`:x;
+}
+function csv3ParseLegacyEqExpr(expr){
+  let s=String(expr??'')
+    .replace(/[−–—﹣－]/g,'-')
+    .replace(/[＋]/g,'+')
+    .replace(/[×✕]/g,'\\times ')
+    .replace(/[µμ]/g,'\\mu ')
+    .replace(/[ΩΩ]/g,'\\Omega ')
+    .replace(/[∆Δ]/g,'\\Delta ')
+    .replace(/∴/g,'\\therefore ')
+    .replace(/[⇒⟹]/g,'\\Rightarrow ')
+    .replace(/≈/g,'\\approx ')
+    .replace(/∝/g,'\\propto ')
+    .trim();
+
+  let out='';
+  for(let i=0;i<s.length;){
+    if(s[i]==='\\'){
+      const m=s.slice(i).match(/^\\([fFrRoO])\s*\(/);
+      if(m){
+        const open=i+m[0].lastIndexOf('(');
+        const close=csv3EqFindClose(s,open);
+        if(close>open){
+          const args=csv3EqSplitArgs(s.slice(open+1,close));
+          const code=m[1].toLowerCase();
+          let repl='';
+          if(code==='f'&&args.length>=2){
+            repl=`\\frac{${csv3ParseLegacyEqExpr(args[0])}}{${csv3ParseLegacyEqExpr(args.slice(1).join(','))}}`;
+          }else if(code==='r'){
+            if(args.length>=2)repl=`\\sqrt[${csv3ParseLegacyEqExpr(args[0])}]{${csv3ParseLegacyEqExpr(args.slice(1).join(','))}}`;
+            else repl=`\\sqrt{${csv3ParseLegacyEqExpr(args[0]||'')}}`;
+          }else if(code==='o'){
+            const parsed=args.map(a=>csv3ParseLegacyEqExpr(a).trim());
+            const arrowIndex=parsed.findIndex(a=>/\\rightarrow|\\longrightarrow/.test(a));
+            if(arrowIndex>=0){
+              const labels=args.filter((_,j)=>j!==arrowIndex).map(csv3EqLabel).filter(Boolean);
+              if(labels.length>=2)repl=`\\xrightarrow[${labels[1]}]{${labels[0]}}`;
+              else if(labels.length===1)repl=`\\xrightarrow{${labels[0]}}`;
+              else repl='\\rightarrow';
+            }else if(parsed.length>=2){
+              // Old Word EQ \\O(base, top) is commonly used for oxidation numbers.
+              repl=`\\overset{${parsed[1]}}{${parsed[0]}}`;
+            }else repl=parsed[0]||'';
+          }
+          if(repl){out+=repl;i=close+1;continue;}
+        }
+      }
+    }
+    out+=s[i++];
+  }
+
+  return out
+    .replace(/\\(pi|alpha|beta|gamma|theta|lambda|mu|omega|Delta|Omega)\b/gi,(m,n)=>'\\'+n)
+    // A few legacy EQ fields keep numeric formula suffixes as plain text rather
+    // than Word subscript runs. Convert those without touching standalone 10^n values.
+    .replace(/([A-Za-z])([0-9]+)(?![A-Za-z0-9_{])/g,'$1_{$2}')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+function csv3LegacyEqPart(s){
+  return csv3ParseLegacyEqExpr(s);
+}
+function csv3EqFieldToKatex(instr,symbolCodes=[]){
+  const s=String(instr??'').replace(/\s+/g,' ').trim();
+  if(!/^EQ\b/i.test(s))return '';
+  let body=s.replace(/^EQ\s*/i,'').trim();
+
+  // Backward-compatible fallback for an older field collector that supplied
+  // symbol codes separately instead of inserting them into the instruction.
+  if(/^\\o\s*\(\s*,\s*\)$/i.test(body)){
+    const codes=(symbolCodes||[]).map(x=>String(x||'').toUpperCase().replace(/^0X/,''));
+    const hasDelta=codes.some(x=>x==='F044'||x==='0044'||x==='44');
+    const hasArrow=codes.some(x=>x==='F0AE'||x==='00AE'||x==='AE');
+    if(hasDelta&&hasArrow)return '\\xrightarrow{\\Delta}';
+  }
+
+  return csv3ParseLegacyEqExpr(body);
+}
+function csv3Attr(el,name){
+  if(!el)return '';
+  return el.getAttributeNS(NS,name)||el.getAttribute('w:'+name)||el.getAttribute(name)||'';
+}
+function csv3DirectChild(el,name){
+  return el?[...el.children].find(x=>x.namespaceURI===NS&&x.localName===name)||null:null;
+}
+function csv3RunProps(rPr){
+  const props={underline:null,script:null};
+  if(!rPr)return props;
+
+  const va=csv3DirectChild(rPr,'vertAlign');
+  if(va){
+    const vv=(csv3Attr(va,'val')||'').toLowerCase();
+    if(vv==='superscript')props.script='sup';
+    else if(vv==='subscript')props.script='sub';
+    else props.script='none';
+  }
+
+  const u=csv3DirectChild(rPr,'u');
+  if(u){
+    const uv=(csv3Attr(u,'val')||'single').toLowerCase();
+    props.underline=!['0','false','none','nil'].includes(uv);
+  }
+  return props;
+}
+function csv3MergeProps(base,over){
+  return {
+    underline:over&&over.underline!==null?over.underline:(base?base.underline:null),
+    script:over&&over.script!==null?over.script:(base?base.script:null)
+  };
+}
+function csv3StyleIdFromRPr(rPr){
+  const s=csv3DirectChild(rPr,'rStyle');
+  return s?csv3Attr(s,'val'):'';
+}
+function csv3ParagraphStyleId(p){
+  const pPr=csv3DirectChild(p,'pPr');
+  const ps=csv3DirectChild(pPr,'pStyle');
+  return ps?csv3Attr(ps,'val'):'';
+}
+function csv3Ancestor(el,localName){
+  let n=el&&el.parentElement;
+  while(n){
+    if(n.namespaceURI===NS&&n.localName===localName)return n;
+    n=n.parentElement;
+  }
+  return null;
+}
+async function csv3MakeContext(zip){
+  const ctx={styles:new Map(),resolved:new Map(),defaults:{underline:null,script:null}};
+  const entry=zip.file('word/styles.xml');
+  if(!entry)return ctx;
+  try{
+    const sd=new DOMParser().parseFromString(await entry.async('string'),'application/xml');
+
+    const def=sd.getElementsByTagNameNS(NS,'docDefaults')[0];
+    if(def){
+      const rpd=def.getElementsByTagNameNS(NS,'rPrDefault')[0];
+      const rp=rpd&&[...rpd.children].find(x=>x.namespaceURI===NS&&x.localName==='rPr');
+      ctx.defaults=csv3RunProps(rp);
+    }
+
+    for(const st of sd.getElementsByTagNameNS(NS,'style')){
+      const id=csv3Attr(st,'styleId');
+      if(!id)continue;
+      const based=csv3DirectChild(st,'basedOn');
+      const rPr=csv3DirectChild(st,'rPr');
+      ctx.styles.set(id,{
+        basedOn:based?csv3Attr(based,'val'):'',
+        props:csv3RunProps(rPr)
+      });
+    }
+  }catch(e){
+    console.warn('CSV Generator #3: styles.xml parse skipped',e);
+  }
+  return ctx;
+}
+function csv3ResolveStyle(ctx,id,seen=new Set()){
+  if(!ctx||!id)return {underline:null,script:null};
+  if(ctx.resolved.has(id))return ctx.resolved.get(id);
+  if(seen.has(id))return {underline:null,script:null};
+  seen.add(id);
+  const st=ctx.styles.get(id);
+  if(!st)return {underline:null,script:null};
+  let props=st.basedOn?csv3ResolveStyle(ctx,st.basedOn,seen):{underline:null,script:null};
+  props=csv3MergeProps(props,st.props);
+  ctx.resolved.set(id,props);
+  return props;
+}
+function csv3RunInfo(r,ctx){
+  let props=ctx?ctx.defaults:{underline:null,script:null};
+
+  // Paragraph style can supply run formatting (including underline).
+  const p=csv3Ancestor(r,'p');
+  if(p){
+    const pStyle=csv3ParagraphStyleId(p);
+    if(pStyle)props=csv3MergeProps(props,csv3ResolveStyle(ctx,pStyle));
+
+    // Direct paragraph run-properties also apply to text runs.
+    const pPr=csv3DirectChild(p,'pPr');
+    const pRPr=csv3DirectChild(pPr,'rPr');
+    props=csv3MergeProps(props,csv3RunProps(pRPr));
+  }
+
+  const rPr=csv3DirectChild(r,'rPr');
+  const charStyle=csv3StyleIdFromRPr(rPr);
+  if(charStyle)props=csv3MergeProps(props,csv3ResolveStyle(ctx,charStyle));
+  props=csv3MergeProps(props,csv3RunProps(rPr));
+
+  return {
+    script:props.script==='sup'?'sup':props.script==='sub'?'sub':'',
+    underline:props.underline===true
+  };
+}
+function csv3WordSymbolText(sym){
+  if(!sym)return '';
+  const font=(csv3Attr(sym,'font')||'').toLowerCase();
+  const raw=(csv3Attr(sym,'char')||'').toUpperCase().replace(/^0X/,'');
+  const key=raw.replace(/^F0/,'').replace(/^00/,'');
+
+  // Legacy Microsoft Symbol-font codes confirmed from Question.docx + Answer.docx.
+  const symbolMap={
+    '5F':'_',                 // fill-in-the-blank underscore
+    '3E':'$>$',               // >
+    '3C':'$<$',               // <
+    '44':'$\\Delta$',         // Δ
+    '57':'$\\Omega$',         // Ω
+    '6D':'$\\mu$',            // µ / μ
+    'B0':'$^{\\circ}$',       // °
+    'B4':'$\\times$',         // ×
+    'AE':'$\\rightarrow$',    // →
+    'BE':'',                  // horizontal arrow extender used inside old EQ fields
+    'DE':'$\\Rightarrow$',    // ⇒
+    '5C':'$\\therefore$',     // ∴
+    'BB':'$\\approx$',        // ≈
+    'B5':'$\\propto$'         // ∝
+  };
+
+  if((font==='symbol'||raw.startsWith('F0')) && Object.prototype.hasOwnProperty.call(symbolMap,key))return symbolMap[key];
+  if(Object.prototype.hasOwnProperty.call(symbolMap,key))return symbolMap[key];
+
+  // Unknown private-use glyph: preserve it instead of silently deleting data.
+  const cp=parseInt(raw,16);
+  return Number.isFinite(cp)&&cp>0&&cp<=0x10FFFF ? String.fromCodePoint(cp) : '';
+}
+function csv3WordSymbolMathToken(sym){
+  if(!sym)return '';
+  const raw=(csv3Attr(sym,'char')||'').toUpperCase().replace(/^0X/,'');
+  const key=raw.replace(/^F0/,'').replace(/^00/,'');
+  const map={
+    '5F':'_', '3E':'>', '3C':'<', '44':'\\Delta', '57':'\\Omega', '6D':'\\mu',
+    'B0':'^{\\circ}', 'B4':'\\times ', 'AE':'\\rightarrow', 'BE':'',
+    'DE':'\\Rightarrow', '5C':'\\therefore', 'BB':'\\approx', 'B5':'\\propto'
+  };
+  return Object.prototype.hasOwnProperty.call(map,key)?map[key]:'';
+}
+function csv3RunRawText(r){
+  let t='';
+  for(const c of r.children){
+    if(c.namespaceURI!==NS)continue;
+    if(c.localName==='t'||c.localName==='delText')t+=c.textContent||'';
+    else if(c.localName==='sym')t+=csv3WordSymbolText(c);
+    else if(c.localName==='tab'||c.localName==='ptab')t+='\t';
+    else if(c.localName==='br'||c.localName==='cr')t+=' ';
+    else if(c.localName==='noBreakHyphen')t+='-';
+  }
+  return t;
+}
+function csv3HasPreservedWhitespace(r){
+  const XMLNS='http://www.w3.org/XML/1998/namespace';
+  return [...r.getElementsByTagNameNS(NS,'t')].some(t=>{
+    const sp=t.getAttributeNS(XMLNS,'space')||t.getAttribute('xml:space')||'';
+    return sp.toLowerCase()==='preserve' && /^[\s\u00A0]+$/u.test(t.textContent||'');
+  });
+}
+function csv3BlankWidth(text){
+  let n=0;
+  for(const ch of String(text??'')){
+    if(ch==='\t')n+=4;
+    else if(ch==='\u00A0'||/\s/u.test(ch))n+=1;
+  }
+  return n;
+}
+function csv3KeepBlank(text,underlined,r){
+  let t=String(text??'')
+    // Legacy Symbol-font/private-use glyphs that can surface after XML parsing.
+    .replace(/\uF05F/g,'_')
+    .replace(/\uF03E/g,'$>$')
+    .replace(/\uF03C/g,'$<$')
+    .replace(/\uF044/g,'$\\Delta$')
+    .replace(/\uF057/g,'$\\Omega$')
+    .replace(/\uF06D/g,'$\\mu$')
+    .replace(/\uF0B0/g,'$^{\\circ}$')
+    .replace(/\uF0B4/g,'$\\times$')
+    .replace(/\uF0AE/g,'$\\rightarrow$')
+    .replace(/\uF0BE/g,'')
+    .replace(/\uF0DE/g,'$\\Rightarrow$')
+    .replace(/\uF05C/g,'$\\therefore$')
+    .replace(/\uF0BB/g,'$\\approx$')
+    .replace(/\uF0B5/g,'$\\propto$')
+    .replace(/\uFF1E/g,'$>$')
+    .replace(/\uFF1C/g,'$<$')
+    .replace(/[\uFF3F\uFE4D\uFE4E\uFE4F]/g,'_');
+
+  const onlyWhitespace=t!=='' && !/[^\s\u00A0]/u.test(t);
+  if(onlyWhitespace){
+    const width=csv3BlankWidth(t);
+    const hasTab=/\t/.test(t);
+    const preserved=csv3HasPreservedWhitespace(r);
+
+    // Primary rule: any underlined whitespace run is a fill-in-the-blank.
+    // Also accept 2+ preserved spaces because Word can move underline to a style
+    // or drop the direct <w:u> from the run while keeping xml:space="preserve".
+    if(underlined || (preserved && width>=2)){
+      const visible=Math.max(4,Math.min(32,width||4));
+      return '_'.repeat(visible);
+    }
+
+    // A positioned/tab blank is common in Word worksheets. Only convert a tab
+    // when it is a standalone whitespace run with enough visual width.
+    if(hasTab && width>=4 && preserved){
+      return '____';
+    }
+  }
+  return t;
+}
+function csv3NormalizeScriptValue(value){
+  return String(value??'')
+    .replace(/\s+/g,'')
+    .replace(/[−–—﹣－]/g,'-')
+    .replace(/[＋]/g,'+');
+}
+function csv3ScriptCode(kind,value){
+  const x=csv3NormalizeScriptValue(value);
+  if(!x)return '';
+  // Requested CSV style: NH_3 but gL^{-1}; multi-character scripts use braces.
+  if(kind==='sub' && /^[A-Za-z0-9]$/u.test(x))return '_'+x;
+  return kind==='sup'?`^{${x}}`:`_{${x}}`;
+}
+function csv3UnicodeScripts(t){
+  const sr=new RegExp('(['+SCRIPT_BASE+']+)([⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾]+)','gu');
+  const br=new RegExp('(['+SCRIPT_BASE+']+)([₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎]+)','gu');
+  t=String(t??'').replace(sr,(m,b,x)=>'$'+b+csv3ScriptCode('sup',[...x].map(c=>SUPMAP[c]||c).join(''))+'$');
+  return t.replace(br,(m,b,x)=>'$'+b+csv3ScriptCode('sub',[...x].map(c=>SUBMAP[c]||c).join(''))+'$');
+}
+function csv3AttachScript(out,kind,value){
+  const code=csv3ScriptCode(kind,value);
+  if(!code)return out;
+
+  // If the previous token is already inside $...$, extend the same formula.
+  const math=out.match(/^(.*)\$([^$]+)\$$/s);
+  if(math)return math[1]+'$'+math[2]+code+'$';
+
+  // Pull the immediately preceding unit / chemical formula into the same LaTeX block.
+  // Examples: gL + superscript -1 -> $gL^{-1}$, NH + subscript 3 -> $NH_3$.
+  const base=out.match(/([A-Za-z0-9\u00B5\u03BC\u03A9\u03B8\u03BB\u03C0\u03B1\u03B2\u03B3\u03B4\u0394\u03A3\u00D7\u00B7+\-\/=]+)$/u);
+  if(base){
+    return out.slice(0,-base[1].length)+'$'+base[1]+code+'$';
+  }
+  return out+'${}'+code+'$';
+}
+function csv3InlineMathSymbols(text){
+  return String(text??'')
+    // Unicode symbols that may be stored directly rather than as <w:sym>.
+    .replace(/⇌/g,'$\\rightleftharpoons$')
+    .replace(/→/g,'$\\rightarrow$')
+    .replace(/[⇒⟹]/g,'$\\Rightarrow$')
+    .replace(/∴/g,'$\\therefore$')
+    .replace(/≈/g,'$\\approx$')
+    .replace(/∝/g,'$\\propto$')
+    .replace(/[×✕]/g,'$\\times$')
+    .replace(/[µμ]/g,'$\\mu$')
+    .replace(/[ΩΩ]/g,'$\\Omega$')
+    .replace(/[∆Δ]/g,'$\\Delta$')
+    .replace(/°/g,'$^{\\circ}$');
+}
+function csv3MergeAdjacentMath(text){
+  let s=String(text??''),prev='';
+  while(s!==prev){
+    prev=s;
+    s=s.replace(/\$([^$]*)\$\$([^$]*)\$/g,(m,a,b)=>`$${a}${b}$`);
+  }
+  return s;
+}
+function csv3AppendPlain(out,text){
+  let t=csv3InlineMathSymbols(text);
+
+  // If a chemical/unit formula continues immediately after a generated math block,
+  // keep it in the same $...$ block.  Example: H + subscript 2 + O => $H_2O$.
+  const tail=out.match(/^(.*)\$([^$]+)\$$/s);
+  if(tail && t && !/^\s/u.test(t) && !t.startsWith('$')){
+    const lead=t.match(/^([A-Za-z0-9+\-\/=().\[\]]+)/u);
+    if(lead&&lead[1]){
+      out=tail[1]+'$'+tail[2]+lead[1]+'$';
+      t=t.slice(lead[1].length);
+    }
+  }
+  return csv3MergeAdjacentMath(out+t);
+}
+function csv3FieldInstrRun(r,ctx){
+  const info=csv3RunInfo(r,ctx);
+  let out='';
+  for(const c of r.children){
+    if(c.namespaceURI!==NS)continue;
+    if(c.localName==='instrText'){
+      let raw=c.textContent||'';
+      if(info.script){
+        const x=csv3NormalizeScriptValue(raw);
+        raw=x?(info.script==='sup'?`^{${x}}`:`_{${x}}`):'';
+      }
+      out+=raw;
+    }else if(c.localName==='sym'){
+      out+=csv3WordSymbolMathToken(c);
+    }
+  }
+  return out;
+}
+function csv3FieldSymbolCodes(r){
+  return [...r.getElementsByTagNameNS(NS,'sym')].map(x=>csv3Attr(x,'char')).filter(Boolean);
+}
+function csv3AppendRun(out,r,ctx){
+  const instr=[...r.getElementsByTagNameNS(NS,'instrText')].map(x=>x.textContent).join('');
+  if(instr){
+    const k=csv3EqFieldToKatex(csv3FieldInstrRun(r,ctx),csv3FieldSymbolCodes(r));
+    return k?csv3MergeAdjacentMath(out+'$'+k+'$'):out;
+  }
+  const info=csv3RunInfo(r,ctx);
+  let text=csv3KeepBlank(csv3RunRawText(r),info.underline,r);
+  if(!text)return out;
+  if(info.script)return csv3MergeAdjacentMath(csv3AttachScript(out,info.script,text));
+  // Handles Unicode superscript/subscript characters too (e.g. gL⁻¹, NH₃)
+  // plus direct Unicode scientific symbols such as ⇌.
+  return csv3AppendPlain(out,csv3UnicodeScripts(text));
+}
+function csv3FldCharType(r){
+  const fc=[...r.getElementsByTagNameNS(NS,'fldChar')][0];
+  if(!fc)return '';
+  return (csv3Attr(fc,'fldCharType')||csv3Attr(fc,'val')||'').toLowerCase();
+}
+function csv3ParagraphText(p,ctx){
+  const arr=[...p.childNodes];
+  let out='';
+  for(let i=0;i<arr.length;i++){
+    const x=arr[i];
+    if(x.nodeType!==1)continue;
+
+    if(x.namespaceURI===NS&&x.localName==='r'&&csv3FldCharType(x)==='begin'){
+      let instr='',endFound=false,visible='',symbolCodes=[],inCode=true;
+      for(let k=i+1;k<arr.length;k++){
+        const y=arr[k];
+        if(y.nodeType!==1)continue;
+        if(y.namespaceURI===NS&&y.localName==='r'){
+          const ft=csv3FldCharType(y);
+          if(ft==='separate'){inCode=false;continue;}
+          if(ft==='end'){
+            i=k;endFound=true;break;
+          }
+          if(inCode){
+            const part=csv3FieldInstrRun(y,ctx);
+            if(part)instr+=part;
+            symbolCodes.push(...csv3FieldSymbolCodes(y));
+          }else{
+            visible=csv3AppendRun(visible,y,ctx);
+          }
+        }
+      }
+      const kk=csv3EqFieldToKatex(instr,symbolCodes);
+      if(kk)out=csv3MergeAdjacentMath(out+'$'+kk+'$');
+      else if(visible)out=csv3MergeAdjacentMath(out+visible);
+      if(endFound)continue;
+    }
+
+    if(x.namespaceURI===MNS&&(x.localName==='oMath'||x.localName==='oMathPara')){
+      out+='$'+ommlToKatex(x)+'$';
+    }else if(x.namespaceURI===NS&&x.localName==='fldSimple'){
+      const instr=csv3Attr(x,'instr');
+      const k=csv3EqFieldToKatex(instr);
+      out+=k?'$'+k+'$':csv3WalkChildren(x,ctx);
+    }else if(x.namespaceURI===NS&&x.localName==='r'){
+      out=csv3AppendRun(out,x,ctx);
+    }else{
+      out+=csv3WalkChildren(x,ctx);
+    }
+  }
+  return out;
+}
+function csv3WalkChildren(parent,ctx){
+  let out='';
+  for(const n of parent.childNodes){
+    if(n.nodeType!==1)continue;
+    if(n.namespaceURI===MNS&&(n.localName==='oMath'||n.localName==='oMathPara')){
+      out+='$'+ommlToKatex(n)+'$';
+    }else if(n.namespaceURI===NS&&n.localName==='fldSimple'){
+      const instr=csv3Attr(n,'instr');
+      const k=csv3EqFieldToKatex(instr);
+      out+=k?'$'+k+'$':csv3WalkChildren(n,ctx);
+    }else if(n.namespaceURI===NS&&n.localName==='p'){
+      out+=csv3ParagraphText(n,ctx)+' ';
+    }else if(n.namespaceURI===NS&&n.localName==='r'){
+      out=csv3AppendRun(out,n,ctx);
+    }else if(n.namespaceURI===NS&&(n.localName==='tab'||n.localName==='ptab')){
+      out+=' ';
+    }else{
+      out+=csv3WalkChildren(n,ctx);
+    }
+  }
+  return out;
+}
+function cellCsvTextRich(tc,ctx){
+  return csv3MergeAdjacentMath(
+    csv3WalkChildren(tc,ctx)
+      .replace(/[\s\u00A0]+/gu,' ')
+      .replace(/\uF8E7/g,'')
+      .trim()
+  );
+}
+
 function csvFileLabel(files){
   return files.length ? files.map(f=>f.name).join(', ') : 'কোনো ফাইল নেই';
 }
 
-async function parseQuestionOnly(f){
+async function parseQuestionOnly(f,csvRich=false){
   const z=await JSZip.loadAsync(f), entry=z.file('word/document.xml');
+  const csv3ctx=csvRich?await csv3MakeContext(z):null;
+  const csvText=csvRich?(node=>cellCsvTextRich(node,csv3ctx)):cellCsvText;
   if(!entry)throw new Error('বৈধ Word ফাইল নয়: '+f.name);
   const d=new DOMParser().parseFromString(await entry.async('string'),'application/xml');
   const body=d.getElementsByTagNameNS(NS,'body')[0];
@@ -709,14 +1239,14 @@ async function parseQuestionOnly(f){
   // একই DOCX-এ Question table-এর পরে Answer Sheet table থাকতে পারে।
   // Answer Sheet-কে Question table হিসেবে parse করা যাবে না।
   const questionTbls=tbls.filter(tbl=>{
-    const sample=cellCsvText(tbl).replace(/\s+/g,' ').trim();
+    const sample=csvText(tbl).replace(/\s+/g,' ').trim();
     const hasAnswerHeader=/Answer\s*Sheet|Q\s*No\.?\s*An\s*s|Explanation/i.test(sample);
     const hasQuestion=/(?:^|\s)1\s*[\.\)]/.test(sample) && /(?:^|\s)A\s*[\.\)\-:]/i.test(sample);
     return !hasAnswerHeader && hasQuestion;
   });
   // সাধারণ Question table না মিললে প্রথম table-টিকে fallback হিসেবে নেব,
   // কিন্তু Answer Sheet header থাকা table কখনো নেব না।
-  const usableTbls=questionTbls.length?questionTbls:[tbls[0]].filter(tbl=>!/(Answer\s*Sheet|Q\s*No\.?\s*An\s*s|Explanation)/i.test(cellCsvText(tbl)));
+  const usableTbls=questionTbls.length?questionTbls:[tbls[0]].filter(tbl=>!/(Answer\s*Sheet|Q\s*No\.?\s*An\s*s|Explanation)/i.test(csvText(tbl)));
   const addIssue=(n,kind)=>{
     const old=bad.find(x=>x.n===n);
     if(old){if(!old.kind.includes(kind))old.kind.push(kind)}
@@ -727,7 +1257,7 @@ async function parseQuestionOnly(f){
   // আবার কিছু ফাইলে Word merge করার কারণে চারটি option একই cell-এ থাকে।
   // তাই label (A./B./C./D.) দেখে option আলাদা করা হবে।
   function splitOptions(parts){
-    const text=parts.map(x=>x&&x.__text!==undefined?x.__text:cellCsvText(x)).join(' ').replace(/\s+/g,' ').trim();
+    const text=parts.map(x=>x&&x.__text!==undefined?x.__text:csvText(x)).join(' ').replace(/\s+/g,' ').trim();
     const re=/([A-D])\s*[\.\)\-:]\s*/gi;
     const hits=[];
     let m;
@@ -750,7 +1280,7 @@ async function parseQuestionOnly(f){
       const tr=trs[idx], cells=kids(tr).filter(k=>k.localName==='tc');
       if(cells.length<2)continue;
 
-      const nm=cellCsvText(cells[0]).match(/\d+/);
+      const nm=csvText(cells[0]).match(/\d+/);
       const n=nm?Number(nm[0]):idx+1;
       if(!n)continue;
 
@@ -772,7 +1302,7 @@ async function parseQuestionOnly(f){
 
       // Nested table না থাকলেও পুরো second cell-এর text থেকে parse করার fallback।
       if(!qParts.length){
-        const allText=cellCsvText(cells[1]).replace(/\s+/g,' ').trim();
+        const allText=csvText(cells[1]).replace(/\s+/g,' ').trim();
         const firstOpt=allText.search(/(?:^|\s)(?:A|a)\s*[\.\)\-:]\s*/);
         if(firstOpt>=0){
           const qText=allText.slice(0,firstOpt).trim();
@@ -785,7 +1315,7 @@ async function parseQuestionOnly(f){
         }
       }
 
-      const qText=qParts.map(x=>x.__text!==undefined?x.__text:cellCsvText(x))
+      const qText=qParts.map(x=>x.__text!==undefined?x.__text:csvText(x))
         .join(' ').replace(/\s+/g,' ').trim();
 
       // q row-এর পরের cells এবং merged single-cell options—দুটিই এখানে handle হবে।
@@ -794,7 +1324,7 @@ async function parseQuestionOnly(f){
 
       // কিছু Word ফাইলে question cell-এর text-এর মধ্যেই options থাকে।
       if(Object.keys(opts).length<4){
-        const allCellText=cellCsvText(cells[1]).replace(/\s+/g,' ').trim();
+        const allCellText=csvText(cells[1]).replace(/\s+/g,' ').trim();
         const qMatch=allCellText.search(/(?:^|\s)(?:A|a)\s*[\.\)\-:]\s*/);
         if(qMatch>=0){
           const parsed=splitOptions([{__text:allCellText.slice(qMatch)}]);
@@ -824,8 +1354,10 @@ async function parseQuestionOnly(f){
   if(!map.size)throw new Error('Question কাঠামো শনাক্ত করা যায়নি: '+f.name);
   return {map,bad,title:topTitle(body)};
 }
-async function parseAnswerOnly(f){
+async function parseAnswerOnly(f,csvRich=false){
   const z=await JSZip.loadAsync(f), entry=z.file('word/document.xml');
+  const csv3ctx=csvRich?await csv3MakeContext(z):null;
+  const csvText=csvRich?(node=>cellCsvTextRich(node,csv3ctx)):cellCsvText;
   if(!entry)throw new Error('বৈধ Word ফাইল নয়: '+f.name);
   const d=new DOMParser().parseFromString(await entry.async('string'),'application/xml');
   const body=d.getElementsByTagNameNS(NS,'body')[0], tbl=kids(body).find(k=>k.localName==='tbl');
@@ -833,8 +1365,8 @@ async function parseAnswerOnly(f){
   const map=new Map(),bad=[];
   kids(tbl).filter(k=>k.localName==='tr').forEach((tr,idx)=>{
     const c=kids(tr).filter(k=>k.localName==='tc'); if(c.length<2)return;
-    const n=Number((cellCsvText(c[0]).match(/\d+/)||[])[0]);
-    const am=cellCsvText(c[1]).match(/[A-Da-d]/);
+    const n=Number((csvText(c[0]).match(/\d+/)||[])[0]);
+    const am=csvText(c[1]).match(/[A-Da-d]/);
     if(!n)return;
     if(!am){
       bad.push(n);
@@ -842,7 +1374,7 @@ async function parseAnswerOnly(f){
       map.set(n,{ans:null,ex:[]});
       return;
     }
-    map.set(n,{ans:'ABCD'.indexOf(am[0].toUpperCase()),ex:c[2]?[{t:cellCsvText(c[2])}]:[]});
+    map.set(n,{ans:'ABCD'.indexOf(am[0].toUpperCase()),ex:c[2]?[{t:csvText(c[2])}]:[]});
   });
   if(!map.size)throw new Error('Answer কাঠামো শনাক্ত করা যায়নি: '+f.name);
   return {map,bad,title:topTitle(body)};
@@ -856,45 +1388,22 @@ async function parseCsvMasterFiles(files){
   const all=[],issues=[];
   for(const f of files){
     try{
-      const r=await parseMaster(f);
-      const z=await JSZip.loadAsync(f), entry=z.file('word/document.xml');
-      if(entry){
-        const d=new DOMParser().parseFromString(await entry.async('string'),'application/xml');
-        const body=d.getElementsByTagNameNS(NS,'body')[0];
-        const qcells=[...body.getElementsByTagNameNS(NS,'tc')];
-        let qi=0;
-        for(const q of r.qs){
-          const row=qcells.slice(qi).find(tc=>cellCsvText(tc).trim()===cellCsvText(tc).trim());
-          qi++;
-        }
-      }
-      // Master-এর মূল parser formatting ধরে রাখে; CSV-এর জন্য cell থেকে equation সহ text পুনর্গঠন করি।
-      const flatTbl=[...body.children].find(k=>k.localName==='tbl');
-      if(flatTbl){
-        const rows=[...flatTbl.children].filter(k=>k.localName==='tr');
-        const out=[];
-        for(const tr of rows){
-          const c=[...tr.children].filter(k=>k.localName==='tc');
-          if(c.length>=8){
-            const am=cellCsvText(c[7]).match(/^\s*([A-Da-d])\s*[;；]/);
-            if(am){
-              const qq=cellCsvText(c[1]), oo=[2,3,4,5].map(i=>cellCsvText(c[i])), ex=cellCsvText(c[7]).replace(/^\s*[A-Da-d]\s*[;；]\s*/,'');
-              const ix=out.length; out.push({q:[{t:qq}],o:oo.map(x=>[{t:x}]),ans:'ABCD'.indexOf(am[1].toUpperCase()),ex:[{t:ex}]});
-            }
-          }
-        }
-        if(out.length)r.qs=out;
-      }
+      // IMPORTANT: true = CSV Generator #3 rich parser only.
+      const r=await parseUploadedForCsv(f,true);
       all.push(...r.qs);
-      if(r.bad.length)issues.push(f.name+': অসম্পূর্ণ প্রশ্ন '+r.bad.join(', '));
-    }catch(e){issues.push(f.name+': '+e.message)}
+      if(r.issues&&r.issues.length)issues.push(...r.issues.map(x=>f.name+': '+x));
+    }catch(e){
+      issues.push(f.name+': '+e.message);
+    }
   }
   return {qs:all,issues};
 }
 
 
-async function parseUploadedForCsv(f){
+async function parseUploadedForCsv(f,csvRich=false){
   const z=await JSZip.loadAsync(f),entry=z.file('word/document.xml');
+  const csv3ctx=csvRich?await csv3MakeContext(z):null;
+  const csvText=csvRich?(node=>cellCsvTextRich(node,csv3ctx)):cellCsvText;
   if(!entry)throw new Error('বৈধ Word ফাইল নয়: '+f.name);
   const d=new DOMParser().parseFromString(await entry.async('string'),'application/xml');
   const body=d.getElementsByTagNameNS(NS,'body')[0];
@@ -911,10 +1420,10 @@ async function parseUploadedForCsv(f){
     rows.forEach((tr,idx)=>{
       const c=kids(tr).filter(k=>k.localName==='tc');
       if(c.length<8)return;
-      const n=Number((cellCsvText(c[0]).match(/\d+/)||[])[0])||idx+1;
-      const q=cellCsvText(c[1]);
-      const o=[2,3,4,5].map(i=>cellCsvText(c[i]));
-      const ansText=cellCsvText(c[7]);
+      const n=Number((csvText(c[0]).match(/\d+/)||[])[0])||idx+1;
+      const q=csvText(c[1]);
+      const o=[2,3,4,5].map(i=>csvText(c[i]));
+      const ansText=csvText(c[7]);
       const am=ansText.match(/^\s*([A-Da-d])\s*[;；]/);
       if(!q)addIssue(n,'Question');
       ['A','B','C','D'].forEach((L,i)=>{if(!o[i])addIssue(n,'Option '+L)});
@@ -929,16 +1438,16 @@ async function parseUploadedForCsv(f){
   // একই DOCX-এ আলাদা top-level table হিসেবে থাকতে পারে। Answer table-টি
   // header দেখে খুঁজে নেওয়া হবে; শুধু tbls[1] ধরে নেওয়া হবে না।
   if(tbls.length>=2){
-    const qr=await parseQuestionOnly(f);
-    const atbl=tbls.find(t=>/Answer\s*Sheet|Q\s*No\.?\s*An\s*s|Explanation/i.test(cellCsvText(t)) && !/(?:^|\s)1\s*[\.\)]/.test(cellCsvText(t).slice(0,1200))) || tbls[1];
+    const qr=await parseQuestionOnly(f,csvRich);
+    const atbl=tbls.find(t=>/Answer\s*Sheet|Q\s*No\.?\s*An\s*s|Explanation/i.test(csvText(t)) && !/(?:^|\s)1\s*[\.\)]/.test(csvText(t).slice(0,1200))) || tbls[1];
     const aMap=new Map();
     kids(atbl).filter(k=>k.localName==='tr').forEach(tr=>{
       const c=kids(tr).filter(k=>k.localName==='tc');
       if(c.length<2)return;
-      const n=Number((cellCsvText(c[0]).match(/\d+/)||[])[0]);
+      const n=Number((csvText(c[0]).match(/\d+/)||[])[0]);
       if(!n)return;
-      const am=cellCsvText(c[1]).match(/[A-Da-d]/);
-      const ex=c[2]?cellCsvText(c[2]):'';
+      const am=csvText(c[1]).match(/[A-Da-d]/);
+      const ex=c[2]?csvText(c[2]):'';
       aMap.set(n,{ans:am?'ABCD'.indexOf(am[0].toUpperCase()):null,ex});
     });
     const qs=[];
@@ -958,10 +1467,10 @@ function pairStem(name){
   return name.replace(/\.docx$/i,'').replace(/\b(question|questions|answer|answers|ans)\b/gi,'').replace(/set[-_ ]?[a-z0-9]+/gi,'').replace(/[\s_-]+/g,'').toLowerCase();
 }
 
-async function buildCsvFromQuestionAnswer(qfiles,afiles){
+async function buildCsvFromQuestionAnswer(qfiles,afiles,csvRich=false){
   const qGroups=[],aGroups=[];
-  for(const f of qfiles){try{qGroups.push({f,r:await parseQuestionOnly(f)})}catch(e){qGroups.push({f,error:e.message})}}
-  for(const f of afiles){try{aGroups.push({f,r:await parseAnswerOnly(f)})}catch(e){aGroups.push({f,error:e.message})}}
+  for(const f of qfiles){try{qGroups.push({f,r:await parseQuestionOnly(f,csvRich)})}catch(e){qGroups.push({f,error:e.message})}}
+  for(const f of afiles){try{aGroups.push({f,r:await parseAnswerOnly(f,csvRich)})}catch(e){aGroups.push({f,error:e.message})}}
   const usedA=new Set(), merged=[],issues=[];
   for(const qg of qGroups){
     if(qg.error){issues.push('Question file '+qg.f.name+': '+qg.error);continue;}
@@ -1060,7 +1569,7 @@ async function refreshCsvGenerator(){
         // Question-only is still exportable; Answer/Explanation remain blank.
         for(const f of qf){
           try{
-            const r=await parseQuestionOnly(f);
+            const r=await parseQuestionOnly(f,true);
             for(const [n,q] of r.map) collected.push({n,q:q.q,o:q.o,ans:null,ex:[]});
             lines.push(`Question: ${f.name} — ${r.map.size}টি প্রশ্ন প্রস্তুত (Answer file দেওয়া হয়নি)`);
             lines.push(...r.bad.map(x=>`⚠️ ${f.name}: ${x.n} (${x.kind.join(', ')})`));
@@ -1069,7 +1578,7 @@ async function refreshCsvGenerator(){
           }
         }
       }else{
-        const r=await buildCsvFromQuestionAnswer(qf,af);
+        const r=await buildCsvFromQuestionAnswer(qf,af,true);
         collected.push(...r.qs);
         lines.push(`Question + Answer: ${r.qs.length}টি প্রশ্ন CSV-এর জন্য প্রস্তুত`);
         lines.push(...r.issues.map(x=>'⚠️ '+x));
@@ -1080,7 +1589,7 @@ async function refreshCsvGenerator(){
     if(cf.length){
       for(const f of cf){
         try{
-          const r=await parseUploadedForCsv(f);
+          const r=await parseUploadedForCsv(f,true);
           collected.push(...r.qs);
           lines.push(`Question + Answer একই ফাইলে: ${f.name} — ${r.qs.length}টি প্রশ্ন প্রস্তুত`);
           lines.push(...r.issues.map(x=>'⚠️ '+f.name+': '+x));
