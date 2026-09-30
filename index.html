@@ -92,6 +92,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .csvdrop{min-height:90px;display:flex;align-items:center;justify-content:center;text-align:center}
 #csvReport{margin-top:12px;white-space:pre-line}
 @media(max-width:850px){.csv-grid{grid-template-columns:1fr}}
+
 </style></head><body>
 <section class="auth-wrap" id="loginPanel">
   <div class="login-container">
@@ -1271,4 +1272,14 @@ $('csv').onclick=async()=>{
   $('csv').disabled=false;
 };
 $('zip').onclick=async()=>{const z=new JSZip();files.forEach(f=>z.file(f.name,f.blob));save(`${$('code').value.trim()||'B-01'}__Sets.zip`,await z.generateAsync({type:'blob'}))};
-</script></body></html>
+</script>
+<footer style="background-color: #0e005c; color: white; padding: 15px; text-align: center;">
+    © 2026 All Rights Reserved & Developed by
+    <a href="https://zahirulislamtaj.pages.dev/" 
+       rel="noopener noreferrer"
+       style="color: rgb(240, 236, 236);">
+       <b> Zahirul Islam Taj </b> 
+    </a>
+</footer>
+
+</body></html>
